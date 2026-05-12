@@ -1,6 +1,6 @@
 const SUPABASE_URL = 'https://fcnahusuafrxppxwrfau.supabase.co';
-// Get a free Tenor key: console.cloud.google.com → Enable "Tenor API" → Create API Key
-const TENOR_KEY = '';
+// Get a free Giphy key: developers.giphy.com → Log in → Create an App → API Key
+const GIPHY_KEY = 'RRX4WFoj81k1wqEbRwvKhxjvJKFFcSxn';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZjbmFodXN1YWZyeHBweHdyZmF1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg2MDU1MDMsImV4cCI6MjA5NDE4MTUwM30.64OocHwwuNRWw5k0IrkY9aq7KKaCBiI5_PqoQGc4n2k';
 const _supabase = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
