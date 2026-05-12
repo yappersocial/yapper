@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Home / Yapper</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/config.js"></script>
+<script src="js/components.js"></script>
+</head>
+<body>
+<div class="layout">
+  <nav class="sidebar" id="sidebar"></nav>
+  <main class="main">
+    <div class="feed-header">
+      <div class="tabs">
+        <div class="tab active" id="tab-for-you" onclick="switchTab('for_you')">For you</div>
+        <div class="tab" id="tab-following" onclick="switchTab('following')">Following</div>
+      </div>
+    </div>
+    <div class="compose-box" id="compose-area">
+      <div id="compose-avatar"></div>
+      <div class="compose-right">
+        <textarea id="compose-text" placeholder="What's on your mind?" maxlength="280" oninput="updateCompose()"></textarea>
+        <div class="compose-actions">
+          <span class="char-count" id="char-count">0/280</span>
+          <button class="yap-btn" id="yap-btn" onclick="submitYap()" disabled>Yap</button>
+        </div>
+      </div>
+    </div>
+    <div id="feed"><div class="loading"><div class="spinner"></div></div></div>
+  </main>
+  <aside class="aside" id="aside"></aside>
+</div>
+
+<!-- Compose Modal (mobile) -->
+<div class="modal-overlay hidden" id="compose-modal" style="display:none">
+  <div class="modal" style="position:relative">
+    <button class="modal-close" onclick="closeComposeModal()">✕</button>
+    <div style="display:flex;gap:12px;margin-top:8px">
+      <div id="modal-avatar"></div>
+      <div style="flex:1">
+        <textarea id="modal-text" placeholder="What's on your mind?" maxlength="280" oninput="updateModalCompose()" style="width:100%;background:none;border:none;outline:none;color:var(--text);font-size:20px;resize:none;min-height:100px;"></textarea>
+        <div style="display:flex;justify-content:flex-end;margin-top:8px">
+          <button class="yap-btn" id="modal-yap-btn" onclick="submitModalYap()" disabled>Yap</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let currentProfile = null;
+let currentTab = 'for_you';
+let posts = [];
+let loadingFeed = false;
+
+async function init() {
+  const session = await requireAuth();
+  if (!session) return;
+  currentProfile = await getCurrentProfile();
+  if (!currentProfile || !currentProfile.username) { window.location.href = 'setup.html'; return; }
+
+  document.getElementById('sidebar').innerHTML = sidebarHtml('home', currentProfile);
+  document.getElementById('compose-avatar').innerHTML = avatarHtml(currentProfile, 40);
+  document.getElementById('modal-avatar').innerHTML = avatarHtml(currentProfile, 40);
+  document.getElementById('aside').innerHTML = asideHtml();
+
+  document.getElementById('compose-nav-btn').addEventListener('click', openComposeModal);
+
+  loadFeed();
+  loadSuggestions();
+
+  document.getElementById('aside-search').addEventListener('keydown', e => {
+    if (e.key === 'Enter') window.location.href = `explore.html?q=${encodeURIComponent(e.target.value)}`;
+  });
+}
+
+function switchTab(tab) {
+  currentTab = tab;
+  document.getElementById('tab-for-you').classList.toggle('active', tab === 'for_you');
+  document.getElementById('tab-following').classList.toggle('active', tab === 'following');
+  loadFeed();
+}
+
+async function loadFeed() {
+  if (loadingFeed) return;
+  loadingFeed = true;
+  document.getElementById('feed').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+
+  let query = _supabase.from('posts')
+    .select(`*, profiles!user_id(id,username,display_name,avatar_url,is_verified,is_admin), likes(user_id)`)
+    .order('created_at', { ascending: false })
+    .limit(50);
+
+  if (currentTab === 'following') {
+    const { data: follows } = await _supabase.from('follows').select('following_id').eq('follower_id', currentProfile.id);
+    const ids = (follows || []).map(f => f.following_id);
+    ids.push(currentProfile.id);
+    query = query.in('user_id', ids);
+  }
+
+  const { data, error } = await query;
+  loadingFeed = false;
+  if (error) { document.getElementById('feed').innerHTML = `<div class="empty-state"><p>Error loading feed: ${escapeHtml(error.message)}</p></div>`; return; }
+
+  posts = (data || []).map(p => ({
+    ...p,
+    liked_by_me: (p.likes || []).some(l => l.user_id === currentProfile.id),
+    likes_count: (p.likes || []).length
+  }));
+
+  if (!posts.length) {
+    const msg = currentTab === 'following'
+      ? '<h3>Follow people to see their Yaps</h3><p>Go to <a href="explore.html" style="color:var(--accent)">Explore</a> to find people.</p>'
+      : '<h3>No Yaps yet</h3><p>Be the first to post something!</p>';
+    document.getElementById('feed').innerHTML = `<div class="empty-state">${msg}</div>`;
+    return;
+  }
+
+  document.getElementById('feed').innerHTML = posts.map(p => postHtml(p, currentProfile.id)).join('');
+}
+
+function updateCompose() {
+  const text = document.getElementById('compose-text').value;
+  const count = document.getElementById('char-count');
+  count.textContent = `${text.length}/280`;
+  count.className = 'char-count' + (text.length > 260 ? ' warning' : '') + (text.length > 280 ? ' over' : '');
+  document.getElementById('yap-btn').disabled = !text.trim() || text.length > 280;
+}
+
+function updateModalCompose() {
+  const text = document.getElementById('modal-text').value;
+  document.getElementById('modal-yap-btn').disabled = !text.trim() || text.length > 280;
+}
+
+async function submitYap() {
+  const content = document.getElementById('compose-text').value.trim();
+  if (!content) return;
+  const btn = document.getElementById('yap-btn');
+  btn.disabled = true; btn.textContent = 'Posting...';
+  const { error } = await _supabase.from('posts').insert({ user_id: currentProfile.id, content });
+  if (error) { showToast('Error: ' + error.message); }
+  else { document.getElementById('compose-text').value = ''; updateCompose(); loadFeed(); }
+  btn.textContent = 'Yap';
+}
+
+async function submitModalYap() {
+  const content = document.getElementById('modal-text').value.trim();
+  if (!content) return;
+  const btn = document.getElementById('modal-yap-btn');
+  btn.disabled = true; btn.textContent = 'Posting...';
+  const { error } = await _supabase.from('posts').insert({ user_id: currentProfile.id, content });
+  if (error) { showToast('Error: ' + error.message); btn.disabled=false; btn.textContent='Yap'; }
+  else { document.getElementById('modal-text').value = ''; closeComposeModal(); loadFeed(); }
+}
+
+function openComposeModal() { document.getElementById('compose-modal').style.display='flex'; }
+function closeComposeModal() { document.getElementById('compose-modal').style.display='none'; }
+
+async function toggleLike(postId, btn) {
+  const liked = btn.dataset.liked === '1';
+  const count = parseInt(btn.dataset.count) || 0;
+  const newLiked = !liked;
+  const newCount = newLiked ? count + 1 : count - 1;
+  btn.dataset.liked = newLiked ? '1' : '0';
+  btn.dataset.count = newCount;
+  btn.classList.toggle('liked', newLiked);
+  btn.querySelector('svg').setAttribute('fill', newLiked ? 'currentColor' : 'none');
+  btn.querySelector('span').textContent = newCount;
+
+  if (newLiked) {
+    await _supabase.from('likes').insert({ user_id: currentProfile.id, post_id: postId });
+    const post = posts.find(p => p.id === postId);
+    if (post && post.user_id !== currentProfile.id) {
+      await _supabase.from('notifications').insert({ user_id: post.user_id, type: 'like', actor_id: currentProfile.id, post_id: postId });
+    }
+  } else {
+    await _supabase.from('likes').delete().eq('user_id', currentProfile.id).eq('post_id', postId);
+  }
+}
+
+function replyToPost(postId) { window.location.href = `post.html?id=${postId}`; }
+
+async function loadSuggestions() {
+  const { data: following } = await _supabase.from('follows').select('following_id').eq('follower_id', currentProfile.id);
+  const followingIds = (following || []).map(f => f.following_id);
+  followingIds.push(currentProfile.id);
+
+  const { data: users } = await _supabase.from('profiles').select('id,username,display_name,avatar_url,is_verified,is_admin')
+    .not('id', 'in', `(${followingIds.join(',')})`)
+    .limit(5);
+
+  const container = document.getElementById('suggestions-list');
+  if (!users || !users.length) { container.innerHTML = '<p style="color:var(--text2);font-size:14px">No suggestions right now</p>'; return; }
+  container.innerHTML = users.map(u => `
+    <div class="suggestion">
+      <a href="profile.html?id=${u.id}">${avatarHtml(u, 40)}</a>
+      <div class="info">
+        <a href="profile.html?id=${u.id}" class="name">${escapeHtml(u.display_name || u.username)}</a>
+        <div class="handle">@${escapeHtml(u.username)}</div>
+      </div>
+      <button class="follow-btn" onclick="followUser('${u.id}',this)">Follow</button>
+    </div>`).join('');
+}
+
+async function followUser(userId, btn) {
+  btn.disabled = true;
+  const { error } = await _supabase.from('follows').insert({ follower_id: currentProfile.id, following_id: userId });
+  if (!error) {
+    await _supabase.from('notifications').insert({ user_id: userId, type: 'follow', actor_id: currentProfile.id });
+    btn.closest('.suggestion').remove();
+    showToast('Followed!');
+  } else { btn.disabled = false; }
+}
+
+init();
+</script>
+</body>
+</html>

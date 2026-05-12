@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Notifications / Yapper</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/config.js"></script>
+<script src="js/components.js"></script>
+</head>
+<body>
+<div class="layout">
+  <nav class="sidebar" id="sidebar"></nav>
+  <main class="main">
+    <div class="feed-header">
+      <h2>Notifications</h2>
+    </div>
+    <div id="notif-list"><div class="loading"><div class="spinner"></div></div></div>
+  </main>
+  <aside class="aside" id="aside"></aside>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+let currentProfile = null;
+
+async function init() {
+  const session = await requireAuth();
+  if (!session) return;
+  currentProfile = await getCurrentProfile();
+  if (!currentProfile || !currentProfile.username) { window.location.href = 'setup.html'; return; }
+
+  document.getElementById('sidebar').innerHTML = sidebarHtml('notifications', currentProfile);
+  document.getElementById('aside').innerHTML = asideHtml();
+  document.getElementById('compose-nav-btn').addEventListener('click', () => window.location.href='home.html');
+  document.getElementById('aside-search').addEventListener('keydown', e => {
+    if (e.key==='Enter') window.location.href=`explore.html?q=${encodeURIComponent(e.target.value)}`;
+  });
+
+  await loadNotifications();
+  await _supabase.from('notifications').update({ read: true }).eq('user_id', currentProfile.id).eq('read', false);
+}
+
+async function loadNotifications() {
+  const { data, error } = await _supabase.from('notifications')
+    .select(`*, actor:profiles!notifications_actor_id_fkey(id,username,display_name,avatar_url,is_verified,is_admin), post:posts(content)`)
+    .eq('user_id', currentProfile.id)
+    .order('created_at', { ascending: false })
+    .limit(50);
+
+  if (error) { document.getElementById('notif-list').innerHTML = `<div class="empty-state"><p>${escapeHtml(error.message)}</p></div>`; return; }
+  if (!data || !data.length) { document.getElementById('notif-list').innerHTML = '<div class="empty-state"><h3>No notifications yet</h3><p>When someone likes or follows you, you\'ll see it here.</p></div>'; return; }
+
+  document.getElementById('notif-list').innerHTML = data.map(n => {
+    const actor = n.actor;
+    if (!actor) return '';
+    let icon, text;
+    if (n.type === 'like') {
+      icon = `<div class="notif-icon like"><svg viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></div>`;
+      text = `<strong>${escapeHtml(actor.display_name||actor.username)}</strong> liked your Yap${n.post ? `: "${escapeHtml(n.post.content.slice(0,60))}${n.post.content.length>60?'...':''}"` : ''}`;
+    } else if (n.type === 'follow') {
+      icon = `<div class="notif-icon follow"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg></div>`;
+      text = `<strong>${escapeHtml(actor.display_name||actor.username)}</strong> followed you`;
+    } else if (n.type === 'reply') {
+      icon = `<div class="notif-icon reply"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div>`;
+      text = `<strong>${escapeHtml(actor.display_name||actor.username)}</strong> replied to your Yap`;
+    } else { return ''; }
+
+    const href = n.type === 'follow' ? `profile.html?id=${actor.id}` : (n.post_id ? `post.html?id=${n.post_id}` : '#');
+    return `
+      <a href="${href}" class="notif ${n.read ? '' : 'unread'}">
+        ${icon}
+        <div>
+          ${avatarHtml(actor, 32)}
+        </div>
+        <div>
+          <div class="notif-text">${text}</div>
+          <div class="notif-time">${timeAgo(n.created_at)}</div>
+        </div>
+      </a>`;
+  }).join('');
+}
+
+init();
+</script>
+</body>
+</html>

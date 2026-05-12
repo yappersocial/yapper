@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin Panel / Yapper</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/config.js"></script>
+<script src="js/components.js"></script>
+</head>
+<body>
+<div class="layout">
+  <nav class="sidebar" id="sidebar"></nav>
+  <main class="main">
+    <div class="feed-header">
+      <h2 style="padding:16px;font-size:20px;font-weight:700;">Admin Panel</h2>
+    </div>
+
+    <!-- Stats -->
+    <div class="admin-stats" id="admin-stats">
+      <div class="admin-stat"><div class="num" id="stat-users">—</div><div class="lbl">Total Users</div></div>
+      <div class="admin-stat"><div class="num" id="stat-posts">—</div><div class="lbl">Total Yaps</div></div>
+      <div class="admin-stat"><div class="num" id="stat-verified">—</div><div class="lbl">Verified</div></div>
+      <div class="admin-stat"><div class="num" id="stat-admins">—</div><div class="lbl">Admins</div></div>
+    </div>
+
+    <!-- User management -->
+    <div style="padding:16px 16px 0;font-size:18px;font-weight:700;border-top:1px solid var(--border);margin-top:0">
+      User Management
+    </div>
+    <div class="admin-search">
+      <input type="text" id="user-search" placeholder="Search by name or username..." oninput="filterUsers()">
+    </div>
+
+    <div id="user-list"><div class="loading"><div class="spinner"></div></div></div>
+  </main>
+  <aside class="aside" id="aside"></aside>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+let currentProfile = null;
+let allUsers = [];
+
+async function init() {
+  const session = await requireAuth();
+  if (!session) return;
+  currentProfile = await getCurrentProfile();
+  if (!currentProfile || !currentProfile.username) { window.location.href = 'setup.html'; return; }
+  if (!currentProfile.is_admin) { window.location.href = 'home.html'; return; }
+
+  document.getElementById('sidebar').innerHTML = sidebarHtml('admin', currentProfile);
+  document.getElementById('aside').innerHTML = asideHtml();
+  document.getElementById('compose-nav-btn').addEventListener('click', () => window.location.href='home.html');
+  document.getElementById('aside-search').addEventListener('keydown', e => {
+    if (e.key === 'Enter') window.location.href = `explore.html?q=${encodeURIComponent(e.target.value)}`;
+  });
+
+  await loadStats();
+  await loadUsers();
+}
+
+async function loadStats() {
+  const [users, posts, verified, admins] = await Promise.all([
+    _supabase.from('profiles').select('*', { count: 'exact', head: true }),
+    _supabase.from('posts').select('*', { count: 'exact', head: true }),
+    _supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('is_verified', true),
+    _supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('is_admin', true),
+  ]);
+  document.getElementById('stat-users').textContent = users.count ?? '—';
+  document.getElementById('stat-posts').textContent = posts.count ?? '—';
+  document.getElementById('stat-verified').textContent = verified.count ?? '—';
+  document.getElementById('stat-admins').textContent = admins.count ?? '—';
+}
+
+async function loadUsers() {
+  const { data, error } = await _supabase.from('profiles')
+    .select('id,username,display_name,avatar_url,is_verified,is_admin,created_at')
+    .order('created_at', { ascending: false });
+
+  if (error) { document.getElementById('user-list').innerHTML = `<div class="empty-state"><p>${escapeHtml(error.message)}</p></div>`; return; }
+  allUsers = data || [];
+  renderUsers(allUsers);
+}
+
+function filterUsers() {
+  const q = document.getElementById('user-search').value.trim().toLowerCase();
+  if (!q) { renderUsers(allUsers); return; }
+  renderUsers(allUsers.filter(u =>
+    (u.username || '').toLowerCase().includes(q) ||
+    (u.display_name || '').toLowerCase().includes(q)
+  ));
+}
+
+function renderUsers(users) {
+  if (!users.length) {
+    document.getElementById('user-list').innerHTML = '<div class="empty-state"><h3>No users found</h3></div>';
+    return;
+  }
+  document.getElementById('user-list').innerHTML = users.map(u => {
+    const isYou = u.id === currentProfile.id;
+    const joinDate = new Date(u.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    return `
+      <div class="admin-row" id="row-${u.id}">
+        <a href="profile.html?id=${u.id}">${avatarHtml(u, 44)}</a>
+        <div class="user-info">
+          <div class="name">
+            <a href="profile.html?id=${u.id}" style="color:inherit">${escapeHtml(u.display_name || u.username)}</a>
+            ${badgeHtml(u)}
+            ${isYou ? '<span style="font-size:12px;color:var(--text2);font-weight:400;margin-left:4px">(you)</span>' : ''}
+          </div>
+          <div class="handle">@${escapeHtml(u.username || '—')} · Joined ${joinDate}</div>
+        </div>
+        <div class="admin-actions">
+          <button
+            class="toggle-btn ${u.is_verified ? 'on-verified' : ''}"
+            id="btn-verified-${u.id}"
+            onclick="toggleVerified('${u.id}', this)"
+            title="${u.is_verified ? 'Remove verification' : 'Grant verification'}"
+          >
+            ${u.is_verified
+              ? `<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg> Verified`
+              : `Verify`}
+          </button>
+          <button
+            class="toggle-btn ${u.is_admin ? 'on-admin' : ''}"
+            id="btn-admin-${u.id}"
+            onclick="toggleAdmin('${u.id}', this)"
+            title="${u.is_admin ? 'Remove admin' : 'Grant admin'}"
+            ${isYou ? 'disabled title="Cannot change your own admin status"' : ''}
+          >
+            ${u.is_admin
+              ? `<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/></svg> Admin`
+              : `Make admin`}
+          </button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function toggleVerified(userId, btn) {
+  btn.disabled = true;
+  const user = allUsers.find(u => u.id === userId);
+  if (!user) return;
+  const newVal = !user.is_verified;
+  const { error } = await _supabase.from('profiles').update({ is_verified: newVal }).eq('id', userId);
+  if (error) { showToast('Error: ' + error.message); btn.disabled = false; return; }
+  user.is_verified = newVal;
+  if (newVal && user.is_admin) user.is_admin = false;
+  renderUsers(allUsers.filter(u => {
+    const q = document.getElementById('user-search').value.trim().toLowerCase();
+    return !q || (u.username||'').toLowerCase().includes(q) || (u.display_name||'').toLowerCase().includes(q);
+  }));
+  await loadStats();
+  showToast(newVal ? `@${user.username} is now verified` : `Verification removed from @${user.username}`);
+}
+
+async function toggleAdmin(userId, btn) {
+  if (userId === currentProfile.id) { showToast("You can't change your own admin status"); return; }
+  btn.disabled = true;
+  const user = allUsers.find(u => u.id === userId);
+  if (!user) return;
+  const newVal = !user.is_admin;
+  const { error } = await _supabase.from('profiles').update({ is_admin: newVal }).eq('id', userId);
+  if (error) { showToast('Error: ' + error.message); btn.disabled = false; return; }
+  user.is_admin = newVal;
+  renderUsers(allUsers.filter(u => {
+    const q = document.getElementById('user-search').value.trim().toLowerCase();
+    return !q || (u.username||'').toLowerCase().includes(q) || (u.display_name||'').toLowerCase().includes(q);
+  }));
+  await loadStats();
+  showToast(newVal ? `@${user.username} is now an admin` : `Admin removed from @${user.username}`);
+}
+
+init();
+</script>
+</body>
+</html>

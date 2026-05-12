@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Yapper — Set up your profile</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/config.js"></script>
+</head>
+<body>
+<div class="setup-page">
+  <div class="setup-box">
+    <h1>Set up your profile</h1>
+    <p class="subtitle">Tell people who you are. You can always change this later.</p>
+    <div class="error-msg" id="setup-error"></div>
+
+    <div class="avatar-upload">
+      <div id="avatar-preview">
+        <div class="avatar-placeholder" style="width:72px;height:72px;font-size:28px;" id="avatar-initials">?</div>
+      </div>
+      <div>
+        <label for="avatar-input" class="upload-btn">Upload photo</label>
+        <input type="file" id="avatar-input" accept="image/*">
+        <p style="color:var(--text2);font-size:13px;margin-top:6px;">JPG, PNG or GIF. Max 5MB.</p>
+      </div>
+    </div>
+
+    <form id="setup-form">
+      <div class="form-group">
+        <label>Display Name <span style="color:var(--danger)">*</span></label>
+        <input type="text" id="display-name" placeholder="Your name" maxlength="50" required>
+        <p class="char-hint"><span id="display-name-count">0</span>/50</p>
+      </div>
+      <div class="form-group">
+        <label>Username <span style="color:var(--danger)">*</span></label>
+        <input type="text" id="username" placeholder="username" maxlength="15" required pattern="^[a-zA-Z0-9_]+$">
+        <p class="char-hint"><span id="username-count">0</span>/15 — Letters, numbers, underscores only</p>
+        <p id="username-status" style="font-size:13px;margin-top:4px;"></p>
+      </div>
+      <div class="form-group">
+        <label>Bio</label>
+        <textarea id="bio" placeholder="Tell the world about yourself..." maxlength="160" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:12px 16px;font-size:17px;resize:none;outline:none;min-height:80px;line-height:1.5;transition:border-color 0.2s;" onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'"></textarea>
+        <p class="char-hint"><span id="bio-count">0</span>/160</p>
+      </div>
+      <button type="submit" class="btn-accent" id="setup-btn">Get started</button>
+    </form>
+  </div>
+</div>
+
+<script>
+let avatarFile = null;
+let currentUserId = null;
+
+(async () => {
+  const session = await requireAuth();
+  if (!session) return;
+  currentUserId = session.user.id;
+  const { data: profile } = await _supabase.from('profiles').select('username').eq('id', currentUserId).single();
+  if (profile && profile.username) { window.location.href = 'home.html'; return; }
+})();
+
+document.getElementById('display-name').addEventListener('input', function() {
+  document.getElementById('display-name-count').textContent = this.value.length;
+  const initials = this.value.trim().split(' ').map(w => w[0]).join('').slice(0,2).toUpperCase();
+  document.getElementById('avatar-initials').textContent = initials || '?';
+});
+
+document.getElementById('bio').addEventListener('input', function() {
+  document.getElementById('bio-count').textContent = this.value.length;
+});
+
+let usernameTimer;
+document.getElementById('username').addEventListener('input', function() {
+  const val = this.value;
+  document.getElementById('username-count').textContent = val.length;
+  clearTimeout(usernameTimer);
+  const status = document.getElementById('username-status');
+  if (!val) { status.textContent = ''; return; }
+  if (!/^[a-zA-Z0-9_]+$/.test(val)) { status.style.color = 'var(--danger)'; status.textContent = 'Only letters, numbers, and underscores allowed'; return; }
+  status.style.color = 'var(--text2)'; status.textContent = 'Checking...';
+  usernameTimer = setTimeout(async () => {
+    const { data } = await _supabase.from('profiles').select('id').eq('username', val.toLowerCase()).neq('id', currentUserId || '').maybeSingle();
+    if (data) { status.style.color = 'var(--danger)'; status.textContent = 'Username taken'; }
+    else { status.style.color = 'var(--success)'; status.textContent = 'Username available!'; }
+  }, 500);
+});
+
+document.getElementById('avatar-input').addEventListener('change', function() {
+  const file = this.files[0];
+  if (!file) return;
+  if (file.size > 5 * 1024 * 1024) { alert('Image must be under 5MB'); return; }
+  avatarFile = file;
+  const reader = new FileReader();
+  reader.onload = e => {
+    document.getElementById('avatar-preview').innerHTML = `<img src="${e.target.result}" class="avatar" style="width:72px;height:72px;">`;
+  };
+  reader.readAsDataURL(file);
+});
+
+document.getElementById('setup-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const errEl = document.getElementById('setup-error');
+  errEl.classList.remove('show');
+  const btn = document.getElementById('setup-btn');
+  btn.disabled = true; btn.textContent = 'Setting up...';
+
+  const displayName = document.getElementById('display-name').value.trim();
+  const username = document.getElementById('username').value.trim().toLowerCase();
+  const bio = document.getElementById('bio').value.trim();
+
+  if (!displayName || !username) { errEl.textContent = 'Display name and username are required'; errEl.classList.add('show'); btn.disabled=false; btn.textContent='Get started'; return; }
+  if (!/^[a-zA-Z0-9_]+$/.test(username)) { errEl.textContent = 'Invalid username'; errEl.classList.add('show'); btn.disabled=false; btn.textContent='Get started'; return; }
+
+  const { data: taken } = await _supabase.from('profiles').select('id').eq('username', username).neq('id', currentUserId).maybeSingle();
+  if (taken) { errEl.textContent = 'Username already taken'; errEl.classList.add('show'); btn.disabled=false; btn.textContent='Get started'; return; }
+
+  let avatarUrl = null;
+  if (avatarFile) {
+    const ext = avatarFile.name.split('.').pop();
+    const path = `${currentUserId}/avatar.${ext}`;
+    const { error: uploadErr } = await _supabase.storage.from('avatars').upload(path, avatarFile, { upsert: true });
+    if (!uploadErr) {
+      const { data: urlData } = _supabase.storage.from('avatars').getPublicUrl(path);
+      avatarUrl = urlData.publicUrl;
+    }
+  }
+
+  const { error } = await _supabase.from('profiles').upsert({
+    id: currentUserId, display_name: displayName, username, bio, avatar_url: avatarUrl, updated_at: new Date().toISOString()
+  });
+
+  if (error) { errEl.textContent = error.message; errEl.classList.add('show'); btn.disabled=false; btn.textContent='Get started'; return; }
+  window.location.href = 'home.html';
+});
+</script>
+</body>
+</html>

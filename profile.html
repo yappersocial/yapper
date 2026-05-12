@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Profile / Yapper</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/config.js"></script>
+<script src="js/components.js"></script>
+</head>
+<body>
+<div class="layout">
+  <nav class="sidebar" id="sidebar"></nav>
+  <main class="main">
+    <div class="feed-header" style="display:flex;align-items:center;gap:16px;padding:8px 16px">
+      <button onclick="history.back()" style="border-radius:50%;padding:8px;transition:background 0.2s" onmouseover="this.style.background='rgba(239,243,244,0.1)'" onmouseout="this.style.background='none'">
+        <svg viewBox="0 0 24 24" fill="currentColor" style="width:20px;height:20px"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+      </button>
+      <div>
+        <h2 id="header-name" style="font-size:20px;font-weight:700"></h2>
+        <p id="header-count" style="font-size:13px;color:var(--text2)"></p>
+      </div>
+    </div>
+    <div id="profile-content"><div class="loading"><div class="spinner"></div></div></div>
+    <div id="profile-posts"></div>
+  </main>
+  <aside class="aside" id="aside"></aside>
+</div>
+
+<!-- Edit Profile Modal -->
+<div class="modal-overlay" id="edit-modal" style="display:none">
+  <div class="modal">
+    <button class="modal-close" onclick="closeEditModal()">✕</button>
+    <h2>Edit profile</h2>
+    <div class="error-msg" id="edit-error"></div>
+    <div class="avatar-upload" style="margin-bottom:16px">
+      <div id="edit-avatar-preview"></div>
+      <div>
+        <label for="edit-avatar-input" class="upload-btn">Change photo</label>
+        <input type="file" id="edit-avatar-input" accept="image/*">
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Display Name</label>
+      <input type="text" id="edit-display-name" maxlength="50">
+    </div>
+    <div class="form-group">
+      <label>Bio</label>
+      <textarea id="edit-bio" maxlength="160" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:12px 16px;font-size:15px;resize:none;outline:none;min-height:80px;" onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'"></textarea>
+    </div>
+    <button class="btn-accent" id="save-profile-btn" onclick="saveProfile()">Save</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let currentProfile = null;
+let viewedProfile = null;
+let editAvatarFile = null;
+
+const params = new URLSearchParams(window.location.search);
+const profileId = params.get('id');
+
+async function init() {
+  const session = await requireAuth();
+  if (!session) return;
+  currentProfile = await getCurrentProfile();
+  if (!currentProfile || !currentProfile.username) { window.location.href = 'setup.html'; return; }
+
+  document.getElementById('sidebar').innerHTML = sidebarHtml('profile', currentProfile);
+  document.getElementById('aside').innerHTML = asideHtml();
+  document.getElementById('compose-nav-btn').addEventListener('click', () => window.location.href='home.html');
+  document.getElementById('aside-search').addEventListener('keydown', e => {
+    if (e.key === 'Enter') window.location.href = `explore.html?q=${encodeURIComponent(e.target.value)}`;
+  });
+
+  const id = profileId || currentProfile.id;
+  await loadProfile(id);
+}
+
+async function loadProfile(id) {
+  const { data: profile, error } = await _supabase.from('profiles').select('*').eq('id', id).single();
+  if (error || !profile) { document.getElementById('profile-content').innerHTML = '<div class="empty-state"><h3>User not found</h3></div>'; return; }
+  viewedProfile = profile;
+
+  document.getElementById('header-name').textContent = profile.display_name || profile.username;
+
+  const { count: postCount } = await _supabase.from('posts').select('*', { count: 'exact', head: true }).eq('user_id', id);
+  document.getElementById('header-count').textContent = `${postCount || 0} Yaps`;
+
+  const { count: followersCount } = await _supabase.from('follows').select('*', { count: 'exact', head: true }).eq('following_id', id);
+  const { count: followingCount } = await _supabase.from('follows').select('*', { count: 'exact', head: true }).eq('follower_id', id);
+
+  let isFollowing = false;
+  if (id !== currentProfile.id) {
+    const { data: followRow } = await _supabase.from('follows').select('follower_id').eq('follower_id', currentProfile.id).eq('following_id', id).maybeSingle();
+    isFollowing = !!followRow;
+  }
+
+  const isOwn = id === currentProfile.id;
+  const actionBtn = isOwn
+    ? `<button class="btn-outline" onclick="openEditModal()">Edit profile</button>`
+    : `<button class="btn-outline ${isFollowing ? 'following' : ''}" id="follow-btn" onclick="toggleFollow('${id}',this)">${isFollowing ? 'Following' : 'Follow'}</button>`;
+
+  document.getElementById('profile-content').innerHTML = `
+    <div class="profile-banner">
+      ${profile.banner_url ? `<img src="${escapeHtml(profile.banner_url)}" alt="">` : ''}
+    </div>
+    <div class="profile-info">
+      <div class="profile-actions">${actionBtn}</div>
+      <div class="profile-avatar-wrap">${avatarHtml(profile, 120)}</div>
+      <div class="profile-name" style="display:flex;align-items:center;gap:4px;">${escapeHtml(profile.display_name || profile.username)}${badgeHtml(profile)}</div>
+      <div class="profile-username">@${escapeHtml(profile.username)}</div>
+      ${profile.bio ? `<div class="profile-bio">${escapeHtml(profile.bio)}</div>` : ''}
+      <div class="profile-meta">
+        <span><svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 3h-1V1h-2v2H8V1H6v2H5c-1.11 0-1.99.9-1.99 2L3 19c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V8h14v11zM7 10h5v5H7z"/></svg> Joined ${new Date(profile.created_at).toLocaleDateString('en-US',{month:'long',year:'numeric'})}</span>
+      </div>
+      <div class="profile-stats">
+        <a href="#" onclick="showFollowing('${id}')"><span class="count">${followingCount||0}</span><span class="label">Following</span></a>
+        <a href="#" onclick="showFollowers('${id}')"><span class="count">${followersCount||0}</span><span class="label">Followers</span></a>
+      </div>
+    </div>
+    <div class="tabs" style="border-bottom:1px solid var(--border)">
+      <div class="tab active" id="tab-yaps" onclick="switchProfileTab('yaps','${id}')">Yaps</div>
+      <div class="tab" id="tab-likes" onclick="switchProfileTab('likes','${id}')">Likes</div>
+    </div>`;
+
+  loadProfilePosts(id, 'yaps');
+}
+
+async function switchProfileTab(tab, userId) {
+  document.getElementById('tab-yaps').classList.toggle('active', tab === 'yaps');
+  document.getElementById('tab-likes').classList.toggle('active', tab === 'likes');
+  loadProfilePosts(userId, tab);
+}
+
+async function loadProfilePosts(userId, tab) {
+  document.getElementById('profile-posts').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  let data, error;
+
+  if (tab === 'yaps') {
+    const result = await _supabase.from('posts')
+      .select(`*, profiles!user_id(id,username,display_name,avatar_url,is_verified,is_admin), likes(user_id)`)
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(50);
+    data = result.data; error = result.error;
+  } else {
+    const result = await _supabase.from('likes')
+      .select(`post_id, posts(*, profiles!user_id(id,username,display_name,avatar_url,is_verified,is_admin), likes(user_id))`)
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(50);
+    data = (result.data || []).map(r => r.posts).filter(Boolean);
+    error = result.error;
+  }
+
+  if (error) { document.getElementById('profile-posts').innerHTML = `<div class="empty-state"><p>${escapeHtml(error.message)}</p></div>`; return; }
+
+  const posts = (data || []).map(p => ({ ...p, liked_by_me: (p.likes||[]).some(l=>l.user_id===currentProfile.id), likes_count:(p.likes||[]).length }));
+  if (!posts.length) {
+    document.getElementById('profile-posts').innerHTML = '<div class="empty-state"><h3>No Yaps yet</h3></div>';
+    return;
+  }
+  document.getElementById('profile-posts').innerHTML = posts.map(p => postHtml(p, currentProfile.id)).join('');
+}
+
+async function toggleFollow(userId, btn) {
+  const isFollowing = btn.classList.contains('following');
+  btn.disabled = true;
+  if (isFollowing) {
+    await _supabase.from('follows').delete().eq('follower_id', currentProfile.id).eq('following_id', userId);
+    btn.textContent = 'Follow'; btn.classList.remove('following');
+  } else {
+    await _supabase.from('follows').insert({ follower_id: currentProfile.id, following_id: userId });
+    await _supabase.from('notifications').insert({ user_id: userId, type: 'follow', actor_id: currentProfile.id });
+    btn.textContent = 'Following'; btn.classList.add('following');
+  }
+  btn.disabled = false;
+}
+
+function openEditModal() {
+  document.getElementById('edit-display-name').value = viewedProfile.display_name || '';
+  document.getElementById('edit-bio').value = viewedProfile.bio || '';
+  document.getElementById('edit-avatar-preview').innerHTML = avatarHtml(viewedProfile, 72);
+  document.getElementById('edit-modal').style.display = 'flex';
+}
+function closeEditModal() { document.getElementById('edit-modal').style.display = 'none'; }
+
+document.getElementById && document.addEventListener('DOMContentLoaded', () => {
+  const inp = document.getElementById('edit-avatar-input');
+  if (inp) inp.addEventListener('change', function() {
+    const file = this.files[0]; if (!file) return;
+    editAvatarFile = file;
+    const reader = new FileReader();
+    reader.onload = e => { document.getElementById('edit-avatar-preview').innerHTML = `<img src="${e.target.result}" class="avatar" style="width:72px;height:72px;">`; };
+    reader.readAsDataURL(file);
+  });
+});
+
+async function saveProfile() {
+  const btn = document.getElementById('save-profile-btn');
+  btn.disabled = true; btn.textContent = 'Saving...';
+  const displayName = document.getElementById('edit-display-name').value.trim();
+  const bio = document.getElementById('edit-bio').value.trim();
+  let avatarUrl = viewedProfile.avatar_url;
+
+  if (editAvatarFile) {
+    const ext = editAvatarFile.name.split('.').pop();
+    const path = `${currentProfile.id}/avatar.${ext}`;
+    const { error: uploadErr } = await _supabase.storage.from('avatars').upload(path, editAvatarFile, { upsert: true });
+    if (!uploadErr) {
+      const { data: urlData } = _supabase.storage.from('avatars').getPublicUrl(path);
+      avatarUrl = urlData.publicUrl + '?t=' + Date.now();
+    }
+  }
+
+  const { error } = await _supabase.from('profiles').update({ display_name: displayName, bio, avatar_url: avatarUrl, updated_at: new Date().toISOString() }).eq('id', currentProfile.id);
+  if (error) {
+    document.getElementById('edit-error').textContent = error.message;
+    document.getElementById('edit-error').classList.add('show');
+    btn.disabled = false; btn.textContent = 'Save';
+  } else {
+    closeEditModal();
+    showToast('Profile updated!');
+    await loadProfile(currentProfile.id);
+  }
+}
+
+async function showFollowers(userId) {}
+async function showFollowing(userId) {}
+
+async function toggleLike(postId, btn) {
+  const liked = btn.dataset.liked === '1';
+  const count = parseInt(btn.dataset.count) || 0;
+  const newLiked = !liked; const newCount = newLiked ? count+1 : count-1;
+  btn.dataset.liked = newLiked?'1':'0'; btn.dataset.count = newCount;
+  btn.classList.toggle('liked', newLiked);
+  btn.querySelector('svg').setAttribute('fill', newLiked ? 'currentColor' : 'none');
+  btn.querySelector('span').textContent = newCount;
+  if (newLiked) {
+    await _supabase.from('likes').insert({ user_id: currentProfile.id, post_id: postId });
+  } else {
+    await _supabase.from('likes').delete().eq('user_id', currentProfile.id).eq('post_id', postId);
+  }
+}
+function replyToPost(postId) { window.location.href = `post.html?id=${postId}`; }
+
+init();
+</script>
+</body>
+</html>

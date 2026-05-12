@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Yapper</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/config.js"></script>
+</head>
+<body>
+<script>
+(async () => {
+  const { data: { session } } = await _supabase.auth.getSession();
+  if (!session) { window.location.href = 'auth.html'; return; }
+  const { data: profile } = await _supabase.from('profiles').select('username').eq('id', session.user.id).single();
+  if (!profile || !profile.username) { window.location.href = 'setup.html'; return; }
+  window.location.href = 'home.html';
+})();
+</script>
+</body>
+</html>

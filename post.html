@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Yap / Yapper</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/config.js"></script>
+<script src="js/components.js"></script>
+</head>
+<body>
+<div class="layout">
+  <nav class="sidebar" id="sidebar"></nav>
+  <main class="main">
+    <div class="feed-header" style="display:flex;align-items:center;gap:16px;padding:8px 16px">
+      <button onclick="history.back()" style="border-radius:50%;padding:8px;transition:background 0.2s" onmouseover="this.style.background='rgba(239,243,244,0.1)'" onmouseout="this.style.background='none'">
+        <svg viewBox="0 0 24 24" fill="currentColor" style="width:20px;height:20px"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+      </button>
+      <h2 style="font-size:20px;font-weight:700">Yap</h2>
+    </div>
+    <div id="post-detail"></div>
+    <div id="reply-compose" style="display:none;padding:12px 16px;border-bottom:1px solid var(--border)">
+      <div style="display:flex;gap:12px">
+        <div id="reply-avatar"></div>
+        <div style="flex:1">
+          <textarea id="reply-text" placeholder="Post your reply" maxlength="280" oninput="updateReply()" style="width:100%;background:none;border:none;outline:none;color:var(--text);font-size:17px;resize:none;min-height:60px;"></textarea>
+          <div style="display:flex;justify-content:flex-end">
+            <button class="yap-btn" id="reply-btn" onclick="submitReply()" disabled>Reply</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="replies-list"></div>
+  </main>
+  <aside class="aside" id="aside"></aside>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+let currentProfile = null;
+let postData = null;
+const postId = new URLSearchParams(window.location.search).get('id');
+
+async function init() {
+  const session = await requireAuth();
+  if (!session) return;
+  currentProfile = await getCurrentProfile();
+  if (!currentProfile || !currentProfile.username) { window.location.href = 'setup.html'; return; }
+
+  document.getElementById('sidebar').innerHTML = sidebarHtml('home', currentProfile);
+  document.getElementById('aside').innerHTML = asideHtml();
+  document.getElementById('reply-avatar').innerHTML = avatarHtml(currentProfile, 40);
+  document.getElementById('compose-nav-btn').addEventListener('click', () => window.location.href='home.html');
+  document.getElementById('aside-search').addEventListener('keydown', e => {
+    if (e.key==='Enter') window.location.href=`explore.html?q=${encodeURIComponent(e.target.value)}`;
+  });
+
+  if (!postId) { document.getElementById('post-detail').innerHTML = '<div class="empty-state"><h3>Post not found</h3></div>'; return; }
+  await loadPost();
+  await loadReplies();
+}
+
+async function loadPost() {
+  const { data, error } = await _supabase.from('posts')
+    .select(`*, profiles!user_id(id,username,display_name,avatar_url,is_verified,is_admin), likes(user_id)`)
+    .eq('id', postId)
+    .single();
+
+  if (error || !data) { document.getElementById('post-detail').innerHTML = '<div class="empty-state"><h3>Yap not found</h3></div>'; return; }
+  postData = { ...data, liked_by_me: (data.likes||[]).some(l=>l.user_id===currentProfile.id), likes_count:(data.likes||[]).length };
+  const p = postData;
+  const profile = p.profiles;
+  const date = new Date(p.created_at);
+  const fullDate = date.toLocaleString('en-US',{hour:'numeric',minute:'2-digit',month:'short',day:'numeric',year:'numeric'});
+
+  document.title = `${escapeHtml(profile.display_name||profile.username)} on Yapper`;
+  document.getElementById('reply-compose').style.display = 'block';
+
+  document.getElementById('post-detail').innerHTML = `
+    <div class="post-detail">
+      <div style="display:flex;align-items:center;gap:12px">
+        <a href="profile.html?id=${profile.id}">${avatarHtml(profile, 48)}</a>
+        <div>
+          <a href="profile.html?id=${profile.id}" style="font-weight:700;font-size:15px;display:block">${escapeHtml(profile.display_name||profile.username)}</a>
+          <div style="color:var(--text2);font-size:15px">@${escapeHtml(profile.username)}</div>
+        </div>
+      </div>
+      <div class="post-text">${escapeHtml(p.content)}</div>
+      <div class="post-time-full">${fullDate}</div>
+      <div class="post-stats">
+        <div class="stat"><span id="detail-likes">${p.likes_count}</span> <span style="color:var(--text2)">Likes</span></div>
+        <div class="stat"><span id="detail-replies">0</span> <span style="color:var(--text2)">Replies</span></div>
+      </div>
+      <div class="post-actions" style="padding:4px 0">
+        <button class="action-btn reply-btn" onclick="document.getElementById('reply-text').focus()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <span>Reply</span>
+        </button>
+        <button class="action-btn like-btn ${p.liked_by_me?'liked':''}" id="detail-like-btn" onclick="toggleLike('${p.id}',this)" data-liked="${p.liked_by_me?'1':'0'}" data-count="${p.likes_count}">
+          <svg viewBox="0 0 24 24" fill="${p.liked_by_me?'currentColor':'none'}" stroke="currentColor" stroke-width="1.75"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+          <span>Like</span>
+        </button>
+        <button class="action-btn share-btn" onclick="sharePost('${p.id}')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
+          <span>Share</span>
+        </button>
+        ${p.user_id === currentProfile.id ? `<button class="action-btn" style="color:var(--danger)" onclick="deletePost('${p.id}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg><span>Delete</span></button>` : ''}
+      </div>
+    </div>`;
+}
+
+async function loadReplies() {
+  const { data, error } = await _supabase.from('posts')
+    .select(`*, profiles!user_id(id,username,display_name,avatar_url,is_verified,is_admin), likes(user_id)`)
+    .eq('reply_to', postId)
+    .order('created_at', { ascending: true })
+    .limit(100);
+
+  const replies = (data||[]).map(p=>({...p,liked_by_me:(p.likes||[]).some(l=>l.user_id===currentProfile.id),likes_count:(p.likes||[]).length}));
+  document.getElementById('detail-replies').textContent = replies.length;
+  if (!replies.length) { document.getElementById('replies-list').innerHTML = '<div class="empty-state" style="padding:32px"><p style="color:var(--text2)">No replies yet. Be the first!</p></div>'; return; }
+  document.getElementById('replies-list').innerHTML = `<div style="padding:8px 16px;color:var(--text2);font-size:14px;border-bottom:1px solid var(--border)">Replies</div>` + replies.map(p=>postHtml(p,currentProfile.id)).join('');
+}
+
+function updateReply() {
+  const text = document.getElementById('reply-text').value;
+  document.getElementById('reply-btn').disabled = !text.trim() || text.length > 280;
+}
+
+async function submitReply() {
+  const content = document.getElementById('reply-text').value.trim();
+  if (!content) return;
+  const btn = document.getElementById('reply-btn');
+  btn.disabled = true; btn.textContent = 'Replying...';
+  const { error } = await _supabase.from('posts').insert({ user_id: currentProfile.id, content, reply_to: postId });
+  if (error) { showToast('Error: ' + error.message); btn.disabled=false; btn.textContent='Reply'; return; }
+  if (postData && postData.user_id !== currentProfile.id) {
+    await _supabase.from('notifications').insert({ user_id: postData.user_id, type: 'reply', actor_id: currentProfile.id, post_id: postId });
+  }
+  document.getElementById('reply-text').value = '';
+  btn.textContent = 'Reply';
+  await loadReplies();
+}
+
+async function toggleLike(postId, btn) {
+  const liked=btn.dataset.liked==='1'; const count=parseInt(btn.dataset.count)||0;
+  const newLiked=!liked; const newCount=newLiked?count+1:count-1;
+  btn.dataset.liked=newLiked?'1':'0'; btn.dataset.count=newCount;
+  btn.classList.toggle('liked',newLiked);
+  btn.querySelector('svg').setAttribute('fill',newLiked?'currentColor':'none');
+  const likesEl = document.getElementById('detail-likes');
+  if (likesEl) likesEl.textContent = newCount;
+  if (newLiked) {
+    await _supabase.from('likes').insert({user_id:currentProfile.id,post_id:postId});
+    if (postData && postData.user_id !== currentProfile.id) {
+      await _supabase.from('notifications').insert({user_id:postData.user_id,type:'like',actor_id:currentProfile.id,post_id:postId});
+    }
+  } else {
+    await _supabase.from('likes').delete().eq('user_id',currentProfile.id).eq('post_id',postId);
+  }
+}
+
+function replyToPost(pid) { document.getElementById('reply-text').focus(); }
+
+async function deletePost(pid) {
+  if (!confirm('Delete this Yap?')) return;
+  await _supabase.from('posts').delete().eq('id', pid);
+  history.back();
+}
+
+init();
+</script>
+</body>
+</html>

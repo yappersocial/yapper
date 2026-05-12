@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Explore / Yapper</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/config.js"></script>
+<script src="js/components.js"></script>
+</head>
+<body>
+<div class="layout">
+  <nav class="sidebar" id="sidebar"></nav>
+  <main class="main">
+    <div class="feed-header">
+      <div style="padding:8px 16px">
+        <div class="search-box" style="margin:4px 0">
+          <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+          <input type="text" id="search-input" placeholder="Search Yapper" autofocus>
+        </div>
+      </div>
+      <div class="tabs">
+        <div class="tab active" id="tab-posts" onclick="switchSearch('posts')">Yaps</div>
+        <div class="tab" id="tab-people" onclick="switchSearch('people')">People</div>
+      </div>
+    </div>
+    <div id="explore-results"><div class="loading"><div class="spinner"></div></div></div>
+  </main>
+  <aside class="aside" id="aside"></aside>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+let currentProfile = null;
+let searchMode = 'posts';
+let searchTimer;
+
+async function init() {
+  const session = await requireAuth();
+  if (!session) return;
+  currentProfile = await getCurrentProfile();
+  if (!currentProfile || !currentProfile.username) { window.location.href = 'setup.html'; return; }
+
+  document.getElementById('sidebar').innerHTML = sidebarHtml('explore', currentProfile);
+  document.getElementById('aside').innerHTML = asideHtml();
+  document.getElementById('compose-nav-btn').addEventListener('click', () => window.location.href='home.html');
+
+  const params = new URLSearchParams(window.location.search);
+  const q = params.get('q');
+  if (q) { document.getElementById('search-input').value = q; doSearch(q); }
+  else { loadTrending(); }
+
+  document.getElementById('search-input').addEventListener('input', function() {
+    clearTimeout(searchTimer);
+    const q = this.value.trim();
+    if (!q) { loadTrending(); return; }
+    searchTimer = setTimeout(() => doSearch(q), 300);
+  });
+
+  document.getElementById('aside-search').addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      document.getElementById('search-input').value = e.target.value;
+      doSearch(e.target.value.trim());
+    }
+  });
+}
+
+function switchSearch(mode) {
+  searchMode = mode;
+  document.getElementById('tab-posts').classList.toggle('active', mode==='posts');
+  document.getElementById('tab-people').classList.toggle('active', mode==='people');
+  const q = document.getElementById('search-input').value.trim();
+  if (q) doSearch(q); else loadTrending();
+}
+
+async function loadTrending() {
+  document.getElementById('explore-results').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  const { data, error } = await _supabase.from('posts')
+    .select(`*, profiles!user_id(id,username,display_name,avatar_url,is_verified,is_admin), likes(user_id)`)
+    .order('created_at', { ascending: false })
+    .limit(30);
+  if (error) { document.getElementById('explore-results').innerHTML = `<div class="empty-state"><p>${escapeHtml(error.message)}</p></div>`; return; }
+  renderPosts(data || []);
+}
+
+async function doSearch(q) {
+  if (!q) return;
+  document.getElementById('explore-results').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  if (searchMode === 'posts') {
+    const { data, error } = await _supabase.from('posts')
+      .select(`*, profiles!user_id(id,username,display_name,avatar_url,is_verified,is_admin), likes(user_id)`)
+      .ilike('content', `%${q}%`)
+      .order('created_at', { ascending: false })
+      .limit(50);
+    if (error) { document.getElementById('explore-results').innerHTML = `<div class="empty-state"><p>${escapeHtml(error.message)}</p></div>`; return; }
+    renderPosts(data || []);
+  } else {
+    const { data, error } = await _supabase.from('profiles')
+      .select('*')
+      .or(`username.ilike.%${q}%,display_name.ilike.%${q}%`)
+      .limit(50);
+    if (error) { document.getElementById('explore-results').innerHTML = `<div class="empty-state"><p>${escapeHtml(error.message)}</p></div>`; return; }
+    renderPeople(data || []);
+  }
+}
+
+function renderPosts(data) {
+  const posts = data.map(p => ({ ...p, liked_by_me: (p.likes||[]).some(l=>l.user_id===currentProfile.id), likes_count:(p.likes||[]).length }));
+  if (!posts.length) { document.getElementById('explore-results').innerHTML = '<div class="empty-state"><h3>No results</h3><p>Try different keywords.</p></div>'; return; }
+  document.getElementById('explore-results').innerHTML = posts.map(p => postHtml(p, currentProfile.id)).join('');
+}
+
+async function renderPeople(users) {
+  if (!users.length) { document.getElementById('explore-results').innerHTML = '<div class="empty-state"><h3>No users found</h3></div>'; return; }
+  const { data: follows } = await _supabase.from('follows').select('following_id').eq('follower_id', currentProfile.id);
+  const followingIds = new Set((follows||[]).map(f=>f.following_id));
+
+  document.getElementById('explore-results').innerHTML = users.map(u => {
+    const isYou = u.id === currentProfile.id;
+    const isFollowing = followingIds.has(u.id);
+    return `
+      <div style="display:flex;align-items:center;gap:12px;padding:16px;border-bottom:1px solid var(--border)">
+        <a href="profile.html?id=${u.id}">${avatarHtml(u, 48)}</a>
+        <div style="flex:1;min-width:0">
+          <a href="profile.html?id=${u.id}" style="font-weight:700;font-size:15px;display:block">${escapeHtml(u.display_name||u.username)}</a>
+          <div style="color:var(--text2);font-size:15px">@${escapeHtml(u.username)}</div>
+          ${u.bio ? `<div style="font-size:14px;margin-top:4px;color:var(--text2)">${escapeHtml(u.bio)}</div>` : ''}
+        </div>
+        ${isYou ? '' : `<button class="follow-btn ${isFollowing?'following':''}" data-uid="${u.id}" onclick="toggleFollowPerson('${u.id}',this)">${isFollowing?'Following':'Follow'}</button>`}
+      </div>`;
+  }).join('');
+}
+
+async function toggleFollowPerson(userId, btn) {
+  const isFollowing = btn.classList.contains('following');
+  btn.disabled = true;
+  if (isFollowing) {
+    await _supabase.from('follows').delete().eq('follower_id', currentProfile.id).eq('following_id', userId);
+    btn.textContent = 'Follow'; btn.classList.remove('following');
+  } else {
+    await _supabase.from('follows').insert({ follower_id: currentProfile.id, following_id: userId });
+    await _supabase.from('notifications').insert({ user_id: userId, type: 'follow', actor_id: currentProfile.id });
+    btn.textContent = 'Following'; btn.classList.add('following');
+  }
+  btn.disabled = false;
+}
+
+async function toggleLike(postId, btn) {
+  const liked = btn.dataset.liked==='1'; const count=parseInt(btn.dataset.count)||0;
+  const newLiked=!liked; const newCount=newLiked?count+1:count-1;
+  btn.dataset.liked=newLiked?'1':'0'; btn.dataset.count=newCount;
+  btn.classList.toggle('liked',newLiked);
+  btn.querySelector('svg').setAttribute('fill',newLiked?'currentColor':'none');
+  btn.querySelector('span').textContent=newCount;
+  if (newLiked) await _supabase.from('likes').insert({user_id:currentProfile.id,post_id:postId});
+  else await _supabase.from('likes').delete().eq('user_id',currentProfile.id).eq('post_id',postId);
+}
+function replyToPost(postId) { window.location.href=`post.html?id=${postId}`; }
+
+init();
+</script>
+</body>
+</html>
