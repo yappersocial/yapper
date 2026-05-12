@@ -14,7 +14,7 @@
   <nav class="sidebar" id="sidebar"></nav>
   <main class="main">
     <div class="feed-header">
-      <h2 style="padding:16px;font-size:20px;font-weight:700;">Admin Panel</h2>
+      <h2 style="padding:16px;font-size:20px;font-weight:700;" id="admin-title">Admin Panel</h2>
     </div>
 
     <!-- Stats -->
@@ -22,7 +22,7 @@
       <div class="admin-stat"><div class="num" id="stat-users">—</div><div class="lbl">Total Users</div></div>
       <div class="admin-stat"><div class="num" id="stat-posts">—</div><div class="lbl">Total Yaps</div></div>
       <div class="admin-stat"><div class="num" id="stat-verified">—</div><div class="lbl">Verified</div></div>
-      <div class="admin-stat"><div class="num" id="stat-admins">—</div><div class="lbl">Admins</div></div>
+      <div class="admin-stat"><div class="num" id="stat-banned">—</div><div class="lbl">Banned</div></div>
     </div>
 
     <!-- User management -->
@@ -48,7 +48,13 @@ async function init() {
   if (!session) return;
   currentProfile = await getCurrentProfile();
   if (!currentProfile || !currentProfile.username) { window.location.href = 'setup.html'; return; }
-  if (!currentProfile.is_admin) { window.location.href = 'home.html'; return; }
+  if (!currentProfile.is_admin && !currentProfile.is_super_admin) { window.location.href = 'home.html'; return; }
+
+  window.currentProfile = currentProfile;
+
+  if (currentProfile.is_super_admin) {
+    document.getElementById('admin-title').textContent = 'Super Admin Panel';
+  }
 
   document.getElementById('sidebar').innerHTML = sidebarHtml('admin', currentProfile);
   document.getElementById('aside').innerHTML = asideHtml();
@@ -62,21 +68,21 @@ async function init() {
 }
 
 async function loadStats() {
-  const [users, posts, verified, admins] = await Promise.all([
+  const [users, posts, verified, banned] = await Promise.all([
     _supabase.from('profiles').select('*', { count: 'exact', head: true }),
     _supabase.from('posts').select('*', { count: 'exact', head: true }),
     _supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('is_verified', true),
-    _supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('is_admin', true),
+    _supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('is_banned', true),
   ]);
   document.getElementById('stat-users').textContent = users.count ?? '—';
   document.getElementById('stat-posts').textContent = posts.count ?? '—';
   document.getElementById('stat-verified').textContent = verified.count ?? '—';
-  document.getElementById('stat-admins').textContent = admins.count ?? '—';
+  document.getElementById('stat-banned').textContent = banned.count ?? '—';
 }
 
 async function loadUsers() {
   const { data, error } = await _supabase.from('profiles')
-    .select('id,username,display_name,avatar_url,is_verified,is_admin,created_at')
+    .select('id,username,display_name,avatar_url,is_verified,is_admin,is_super_admin,is_banned,created_at')
     .order('created_at', { ascending: false });
 
   if (error) { document.getElementById('user-list').innerHTML = `<div class="empty-state"><p>${escapeHtml(error.message)}</p></div>`; return; }
@@ -98,45 +104,86 @@ function renderUsers(users) {
     document.getElementById('user-list').innerHTML = '<div class="empty-state"><h3>No users found</h3></div>';
     return;
   }
+  const isSuperAdmin = currentProfile.is_super_admin;
+
   document.getElementById('user-list').innerHTML = users.map(u => {
     const isYou = u.id === currentProfile.id;
     const joinDate = new Date(u.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+    // Ban button: show for all admins; disabled on yourself and other super admins
+    const canBan = !isYou && !u.is_super_admin;
+    const banBtn = `
+      <button
+        class="toggle-btn ${u.is_banned ? 'on-ban' : ''}"
+        id="btn-ban-${u.id}"
+        onclick="toggleBan('${u.id}', this)"
+        title="${u.is_banned ? 'Unban user' : 'Ban user'}"
+        ${!canBan ? `disabled title="${isYou ? 'Cannot ban yourself' : 'Cannot ban a super admin'}"` : ''}
+      >
+        ${u.is_banned
+          ? `<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/></svg> Banned`
+          : `Ban`}
+      </button>`;
+
+    // Verify button
+    const verifyBtn = `
+      <button
+        class="toggle-btn ${u.is_verified ? 'on-verified' : ''}"
+        id="btn-verified-${u.id}"
+        onclick="toggleVerified('${u.id}', this)"
+        title="${u.is_verified ? 'Remove verification' : 'Grant verification'}"
+      >
+        ${u.is_verified
+          ? `<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg> Verified`
+          : `Verify`}
+      </button>`;
+
+    // Admin button: only for super admins, disabled on yourself and other super admins
+    const adminBtn = isSuperAdmin && !u.is_super_admin ? `
+      <button
+        class="toggle-btn ${u.is_admin ? 'on-admin' : ''}"
+        id="btn-admin-${u.id}"
+        onclick="toggleAdmin('${u.id}', this)"
+        title="${u.is_admin ? 'Remove admin' : 'Grant admin'}"
+        ${isYou ? 'disabled' : ''}
+      >
+        ${u.is_admin
+          ? `<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/></svg> Admin`
+          : `Make admin`}
+      </button>` : '';
+
     return `
-      <div class="admin-row" id="row-${u.id}">
+      <div class="admin-row ${u.is_banned ? 'is-banned' : ''}" id="row-${u.id}">
         <a href="profile.html?id=${u.id}">${avatarHtml(u, 44)}</a>
         <div class="user-info">
           <div class="name">
             <a href="profile.html?id=${u.id}" style="color:inherit">${escapeHtml(u.display_name || u.username)}</a>
             ${badgeHtml(u)}
             ${isYou ? '<span style="font-size:12px;color:var(--text2);font-weight:400;margin-left:4px">(you)</span>' : ''}
+            ${u.is_banned ? '<span style="font-size:12px;color:var(--danger);font-weight:600;margin-left:6px">BANNED</span>' : ''}
           </div>
           <div class="handle">@${escapeHtml(u.username || '—')} · Joined ${joinDate}</div>
         </div>
         <div class="admin-actions">
-          <button
-            class="toggle-btn ${u.is_verified ? 'on-verified' : ''}"
-            id="btn-verified-${u.id}"
-            onclick="toggleVerified('${u.id}', this)"
-            title="${u.is_verified ? 'Remove verification' : 'Grant verification'}"
-          >
-            ${u.is_verified
-              ? `<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg> Verified`
-              : `Verify`}
-          </button>
-          <button
-            class="toggle-btn ${u.is_admin ? 'on-admin' : ''}"
-            id="btn-admin-${u.id}"
-            onclick="toggleAdmin('${u.id}', this)"
-            title="${u.is_admin ? 'Remove admin' : 'Grant admin'}"
-            ${isYou ? 'disabled title="Cannot change your own admin status"' : ''}
-          >
-            ${u.is_admin
-              ? `<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/></svg> Admin`
-              : `Make admin`}
-          </button>
+          ${banBtn}
+          ${verifyBtn}
+          ${adminBtn}
         </div>
       </div>`;
   }).join('');
+}
+
+async function toggleBan(userId, btn) {
+  btn.disabled = true;
+  const user = allUsers.find(u => u.id === userId);
+  if (!user) return;
+  const newVal = !user.is_banned;
+  const { error } = await _supabase.from('profiles').update({ is_banned: newVal }).eq('id', userId);
+  if (error) { showToast('Error: ' + error.message); btn.disabled = false; return; }
+  user.is_banned = newVal;
+  reRenderWithFilter();
+  await loadStats();
+  showToast(newVal ? `@${user.username} has been banned` : `@${user.username} has been unbanned`);
 }
 
 async function toggleVerified(userId, btn) {
@@ -147,12 +194,7 @@ async function toggleVerified(userId, btn) {
   const { error } = await _supabase.from('profiles').update({ is_verified: newVal }).eq('id', userId);
   if (error) { showToast('Error: ' + error.message); btn.disabled = false; return; }
   user.is_verified = newVal;
-  if (newVal && user.is_admin) user.is_admin = false;
-  renderUsers(allUsers.filter(u => {
-    const q = document.getElementById('user-search').value.trim().toLowerCase();
-    return !q || (u.username||'').toLowerCase().includes(q) || (u.display_name||'').toLowerCase().includes(q);
-  }));
-  await loadStats();
+  reRenderWithFilter();
   showToast(newVal ? `@${user.username} is now verified` : `Verification removed from @${user.username}`);
 }
 
@@ -165,12 +207,16 @@ async function toggleAdmin(userId, btn) {
   const { error } = await _supabase.from('profiles').update({ is_admin: newVal }).eq('id', userId);
   if (error) { showToast('Error: ' + error.message); btn.disabled = false; return; }
   user.is_admin = newVal;
-  renderUsers(allUsers.filter(u => {
-    const q = document.getElementById('user-search').value.trim().toLowerCase();
-    return !q || (u.username||'').toLowerCase().includes(q) || (u.display_name||'').toLowerCase().includes(q);
-  }));
+  reRenderWithFilter();
   await loadStats();
   showToast(newVal ? `@${user.username} is now an admin` : `Admin removed from @${user.username}`);
+}
+
+function reRenderWithFilter() {
+  const q = document.getElementById('user-search').value.trim().toLowerCase();
+  renderUsers(q ? allUsers.filter(u =>
+    (u.username||'').toLowerCase().includes(q) || (u.display_name||'').toLowerCase().includes(q)
+  ) : allUsers);
 }
 
 init();

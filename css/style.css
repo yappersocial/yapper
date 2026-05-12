@@ -276,6 +276,8 @@ input, textarea { font-family: inherit; }
 .badge-verified svg { fill: #fff; }
 .badge-admin { background: #fff; }
 .badge-admin svg { fill: #000; }
+.badge-super-admin { background: #ffd400; }
+.badge-super-admin svg { fill: #000; }
 .badge::after {
   content: attr(data-tooltip);
   position: absolute; bottom: calc(100% + 6px); left: 50%;
@@ -333,6 +335,9 @@ input, textarea { font-family: inherit; }
 .toggle-btn:hover { background: rgba(239,243,244,0.1); }
 .toggle-btn.on-verified { background: rgba(29,155,240,0.15); border-color: var(--accent); color: var(--accent); }
 .toggle-btn.on-admin { background: rgba(255,255,255,0.1); border-color: #fff; color: #fff; }
+.toggle-btn.on-ban { background: rgba(244,33,46,0.15); border-color: var(--danger); color: var(--danger); }
+.admin-row.is-banned { background: rgba(244,33,46,0.04); }
+.admin-row.is-banned:hover { background: rgba(244,33,46,0.08); }
 .admin-search { margin: 12px 16px; }
 .admin-search input {
   width: 100%; background: var(--bg3); border: 1px solid transparent; border-radius: 9999px;

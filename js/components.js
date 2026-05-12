@@ -8,6 +8,7 @@ function avatarHtml(profile, size = 40) {
 
 function badgeHtml(profile) {
   if (!profile) return '';
+  if (profile.is_super_admin) return `<span class="badge badge-super-admin" data-tooltip="Super Admin"><svg viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/></svg></span>`;
   if (profile.is_admin) return `<span class="badge badge-admin" data-tooltip="Administrator"><svg viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/></svg></span>`;
   if (profile.is_verified) return `<span class="badge badge-verified" data-tooltip="Verified"><svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg></span>`;
   return '';
@@ -126,6 +127,11 @@ function postHtml(post, currentUserId) {
             onclick="event.stopPropagation();openShareMenu(this,event)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
           </button>
+          ${(post.user_id === currentUserId || window.currentProfile?.is_admin || window.currentProfile?.is_super_admin) ? `
+          <button class="action-btn" style="color:var(--danger);margin-left:auto" title="Delete Yap"
+            onclick="event.stopPropagation();feedDeletePost('${post.id}')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+          </button>` : ''}
         </div>
       </div>
     </div>`;
@@ -267,6 +273,15 @@ function showToast(msg) {
 function openPost(postId, e) {
   if (e && e.target.closest('a,button')) return;
   window.location.href = `post.html?id=${postId}`;
+}
+
+async function feedDeletePost(postId) {
+  if (!confirm('Delete this Yap?')) return;
+  const { error } = await _supabase.from('posts').delete().eq('id', postId);
+  if (error) { showToast('Error: ' + error.message); return; }
+  const el = document.querySelector(`[data-post-id="${postId}"]`);
+  if (el) el.remove();
+  showToast('Yap deleted');
 }
 // legacy alias kept so old inline calls don't break
 function sharePost(postId) {

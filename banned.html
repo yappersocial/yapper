@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Account Suspended / Yapper</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/config.js"></script>
+</head>
+<body>
+<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:40px;">
+  <div style="max-width:480px;width:100%;text-align:center;">
+    <div style="font-size:64px;margin-bottom:24px;">🚫</div>
+    <h1 style="font-size:28px;font-weight:700;margin-bottom:12px;">Your account has been suspended</h1>
+    <p style="color:var(--text2);font-size:17px;line-height:1.6;margin-bottom:32px;">
+      Your Yapper account has been suspended for violating our community guidelines.
+      If you believe this is a mistake, please contact support.
+    </p>
+    <button onclick="signOut()" class="btn-primary" style="max-width:240px;">Sign out</button>
+  </div>
+</div>
+<script>
+async function signOut() {
+  await _supabase.auth.signOut();
+  window.location.href = 'auth.html';
+}
+</script>
+</body>
+</html>

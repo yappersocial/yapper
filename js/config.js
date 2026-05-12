@@ -20,6 +20,7 @@ async function getCurrentProfile() {
   const { data: { session } } = await _supabase.auth.getSession();
   if (!session) return null;
   const { data } = await _supabase.from('profiles').select('*').eq('id', session.user.id).single();
+  if (data?.is_banned) { window.location.href = 'banned.html'; return null; }
   return data;
 }
 
