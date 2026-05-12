@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Messages / Yapper</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/config.js"></script>
+<script src="js/components.js"></script>
+</head>
+<body>
+<div style="display:flex;max-width:1280px;margin:0 auto;min-height:100vh;">
+  <nav class="sidebar" id="sidebar"></nav>
+  <div class="dm-wrap">
+    <!-- Conversations list -->
+    <div class="dm-convos">
+      <div class="dm-convos-header">
+        <span>Messages</span>
+        <button class="new-dm-btn" onclick="openNewDMModal()" title="New message">
+          <svg viewBox="0 0 24 24" fill="currentColor" style="width:18px;height:18px"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+        </button>
+      </div>
+      <div class="dm-convo-list" id="dm-convo-list">
+        <div class="loading"><div class="spinner"></div></div>
+      </div>
+    </div>
+
+    <!-- Chat area -->
+    <div class="dm-chat" id="dm-chat">
+      <div class="dm-empty-state">
+        <div>
+          <h3>Your Messages</h3>
+          <p>Select a conversation or start a new one</p>
+          <button class="btn-accent" style="margin-top:16px;padding:10px 20px;border-radius:9999px" onclick="openNewDMModal()">New message</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- New DM modal -->
+<div class="modal-overlay" id="new-dm-modal" style="display:none" onclick="if(event.target===this)this.style.display='none'">
+  <div class="modal" onclick="event.stopPropagation()">
+    <button class="modal-close" onclick="document.getElementById('new-dm-modal').style.display='none'">✕</button>
+    <h2 style="margin-bottom:16px">New message</h2>
+    <input class="new-dm-search" id="new-dm-search" placeholder="Search people..." autocomplete="off" oninput="searchNewDM(this.value)">
+    <div class="new-dm-results" id="new-dm-results"><p style="color:var(--text2);text-align:center;padding:16px;font-size:14px">Search for someone to message</p></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let currentProfile = null;
+let activePartnerId = null;
+let realtimeChannel = null;
+let newDMTimer = null;
+
+async function init() {
+  const session = await requireAuth();
+  if (!session) return;
+  currentProfile = await getCurrentProfile();
+  window.currentProfile = currentProfile;
+  if (!currentProfile?.username) { window.location.href = 'setup.html'; return; }
+
+  document.getElementById('sidebar').innerHTML = sidebarHtml('dm', currentProfile);
+  document.getElementById('compose-nav-btn').addEventListener('click', () => window.location.href = 'home.html');
+
+  await loadConversations();
+
+  // Check URL for ?with=userId to auto-open a conversation
+  const params = new URLSearchParams(window.location.search);
+  const withId = params.get('with');
+  if (withId) openChat(withId);
+}
+
+async function loadConversations() {
+  const { data: msgs } = await _supabase.from('messages')
+    .select(`id, content, created_at, read, sender_id, recipient_id,
+      sender:profiles!messages_sender_fk(id,username,display_name,avatar_url,is_verified,is_admin),
+      recipient:profiles!messages_recipient_fk(id,username,display_name,avatar_url,is_verified,is_admin)`)
+    .or(`sender_id.eq.${currentProfile.id},recipient_id.eq.${currentProfile.id}`)
+    .order('created_at', { ascending: false })
+    .limit(300);
+
+  if (!msgs?.length) {
+    document.getElementById('dm-convo-list').innerHTML = '<p style="color:var(--text2);text-align:center;padding:24px;font-size:14px">No conversations yet</p>';
+    return;
+  }
+
+  const seen = new Set();
+  const convos = [];
+  for (const msg of msgs) {
+    const partnerId = msg.sender_id === currentProfile.id ? msg.recipient_id : msg.sender_id;
+    if (!seen.has(partnerId)) {
+      seen.add(partnerId);
+      const partner = msg.sender_id === currentProfile.id ? msg.recipient : msg.sender;
+      if (!partner) continue;
+      const unread = msgs.filter(m => m.sender_id === partnerId && m.recipient_id === currentProfile.id && !m.read).length;
+      convos.push({ partner, lastMsg: msg, unread });
+    }
+  }
+
+  document.getElementById('dm-convo-list').innerHTML = convos.map(c => {
+    const p = c.partner;
+    const preview = c.lastMsg.content ? escapeHtml(c.lastMsg.content.slice(0, 40)) : '📎 Shared a Yap';
+    return `
+      <div class="dm-convo ${activePartnerId === p.id ? 'active' : ''}" id="convo-${p.id}" onclick="openChat('${p.id}')">
+        ${avatarHtml(p, 44)}
+        <div class="ci">
+          <div class="cn">${escapeHtml(p.display_name||p.username)}${badgeHtml(p)}</div>
+          <div class="cp">${preview}</div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
+          <span class="ct">${timeAgo(c.lastMsg.created_at)}</span>
+          ${c.unread > 0 ? '<div class="unread-dot"></div>' : ''}
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function openChat(partnerId) {
+  activePartnerId = partnerId;
+  document.querySelectorAll('.dm-convo').forEach(el => el.classList.remove('active'));
+  const el = document.getElementById(`convo-${partnerId}`);
+  if (el) el.classList.add('active');
+
+  const { data: partner } = await _supabase.from('profiles')
+    .select('id,username,display_name,avatar_url,is_verified,is_admin')
+    .eq('id', partnerId).single();
+  if (!partner) return;
+
+  document.getElementById('dm-chat').innerHTML = `
+    <div class="dm-chat-header">
+      <a href="profile.html?id=${partner.id}">${avatarHtml(partner, 40)}</a>
+      <div>
+        <div class="pname"><a href="profile.html?id=${partner.id}" style="color:inherit">${escapeHtml(partner.display_name||partner.username)}</a>${badgeHtml(partner)}</div>
+        <div class="phandle">@${escapeHtml(partner.username)}</div>
+      </div>
+    </div>
+    <div class="dm-messages" id="dm-messages"><div class="loading"><div class="spinner"></div></div></div>
+    <div class="dm-input-area">
+      <div class="dm-input-wrap">
+        <textarea id="dm-text" placeholder="Start a message…" rows="1" oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px';updateDmSend()"></textarea>
+      </div>
+      <button class="dm-send-btn" id="dm-send-btn" onclick="sendMessage()" disabled>
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+      </button>
+    </div>`;
+
+  document.getElementById('dm-text').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  });
+
+  await loadMessages(partnerId);
+  await markRead(partnerId);
+
+  // Realtime
+  if (realtimeChannel) _supabase.removeChannel(realtimeChannel);
+  realtimeChannel = _supabase.channel(`dm_${partnerId}`)
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages',
+      filter: `recipient_id=eq.${currentProfile.id}` }, async payload => {
+      if (payload.new.sender_id === partnerId) {
+        await loadMessages(partnerId);
+        await markRead(partnerId);
+        loadConversations();
+      } else {
+        loadConversations();
+      }
+    })
+    .subscribe();
+}
+
+async function loadMessages(partnerId) {
+  const { data, error } = await _supabase.from('messages')
+    .select(`*, sender:profiles!messages_sender_fk(id,username,display_name,avatar_url),
+      shared_post:posts!messages_post_fk(id,content,media_url,media_type,profiles!user_id(id,username,display_name,avatar_url))`)
+    .or(`and(sender_id.eq.${currentProfile.id},recipient_id.eq.${partnerId}),and(sender_id.eq.${partnerId},recipient_id.eq.${currentProfile.id})`)
+    .order('created_at', { ascending: true })
+    .limit(200);
+
+  const container = document.getElementById('dm-messages');
+  if (!container) return;
+  if (error || !data?.length) { container.innerHTML = '<p style="color:var(--text2);text-align:center;padding:24px;font-size:14px">No messages yet. Say hi!</p>'; return; }
+
+  container.innerHTML = data.map(msg => {
+    const mine = msg.sender_id === currentProfile.id;
+    const sp = msg.shared_post;
+    const spHtml = sp ? `
+      <div class="shared-post-card" onclick="window.location.href='post.html?id=${sp.id}'">
+        <div class="sp-author">${escapeHtml(sp.profiles?.display_name || sp.profiles?.username || 'Unknown')}</div>
+        ${sp.content ? `<div class="sp-text">${escapeHtml(sp.content.slice(0, 120))}${sp.content.length > 120 ? '…' : ''}</div>` : ''}
+        ${sp.media_url ? `<img src="${escapeHtml(sp.media_url)}" alt="">` : ''}
+      </div>` : '';
+    return `
+      <div class="dm-msg ${mine?'mine':'theirs'}">
+        ${msg.content ? `<div class="dm-bubble">${escapeHtml(msg.content)}</div>` : ''}
+        ${spHtml}
+        <div class="dm-mtime">${timeAgo(msg.created_at)}</div>
+      </div>`;
+  }).join('');
+  container.scrollTop = container.scrollHeight;
+}
+
+async function markRead(partnerId) {
+  await _supabase.from('messages')
+    .update({ read: true })
+    .eq('sender_id', partnerId)
+    .eq('recipient_id', currentProfile.id)
+    .eq('read', false);
+  loadConversations();
+}
+
+function updateDmSend() {
+  const text = document.getElementById('dm-text')?.value;
+  const btn = document.getElementById('dm-send-btn');
+  if (btn) btn.disabled = !text?.trim();
+}
+
+async function sendMessage() {
+  const textarea = document.getElementById('dm-text');
+  const content = textarea?.value.trim();
+  if (!content || !activePartnerId) return;
+  const btn = document.getElementById('dm-send-btn');
+  btn.disabled = true;
+  textarea.value = '';
+  textarea.style.height = 'auto';
+  const { error } = await _supabase.from('messages').insert({
+    sender_id: currentProfile.id, recipient_id: activePartnerId, content
+  });
+  if (error) { showToast('Error: ' + error.message); btn.disabled = false; return; }
+  await loadMessages(activePartnerId);
+  loadConversations();
+}
+
+// New DM modal
+function openNewDMModal() {
+  document.getElementById('new-dm-search').value = '';
+  document.getElementById('new-dm-results').innerHTML = '<p style="color:var(--text2);text-align:center;padding:16px;font-size:14px">Search for someone to message</p>';
+  document.getElementById('new-dm-modal').style.display = 'flex';
+}
+
+async function searchNewDM(q) {
+  clearTimeout(newDMTimer);
+  const results = document.getElementById('new-dm-results');
+  if (!q.trim()) { results.innerHTML = '<p style="color:var(--text2);text-align:center;padding:16px;font-size:14px">Search for someone to message</p>'; return; }
+  newDMTimer = setTimeout(async () => {
+    const { data } = await _supabase.from('profiles').select('id,username,display_name,avatar_url,is_verified,is_admin')
+      .or(`username.ilike.%${q}%,display_name.ilike.%${q}%`).neq('id', currentProfile.id).limit(10);
+    if (!data?.length) { results.innerHTML = '<p style="color:var(--text2);text-align:center;padding:16px;font-size:14px">No users found</p>'; return; }
+    results.innerHTML = data.map(u => `
+      <div class="new-dm-user" onclick="startNewDM('${u.id}')">
+        ${avatarHtml(u, 44)}
+        <div>
+          <div style="font-weight:700;font-size:15px;display:flex;align-items:center;gap:4px">${escapeHtml(u.display_name||u.username)}${badgeHtml(u)}</div>
+          <div style="color:var(--text2);font-size:13px">@${escapeHtml(u.username)}</div>
+        </div>
+      </div>`).join('');
+  }, 300);
+}
+
+function startNewDM(userId) {
+  document.getElementById('new-dm-modal').style.display = 'none';
+  openChat(userId);
+}
+
+init();
+</script>
+</body>
+</html>
