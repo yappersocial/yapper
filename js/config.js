@@ -1,3 +1,81 @@
+// ── Theme + accent (applied before render to prevent flash) ──────────────
+(function applyTheme() {
+  const html = document.documentElement;
+  html.setAttribute('data-theme',  localStorage.getItem('yapper-theme')  || 'dark');
+  html.setAttribute('data-accent', localStorage.getItem('yapper-accent') || 'iris');
+})();
+
+function setYapperTheme(theme) {
+  localStorage.setItem('yapper-theme', theme);
+  document.documentElement.setAttribute('data-theme', theme);
+}
+function setYapperAccent(accent) {
+  localStorage.setItem('yapper-accent', accent);
+  document.documentElement.setAttribute('data-accent', accent);
+}
+
+function openThemeModal() {
+  const theme  = localStorage.getItem('yapper-theme')  || 'dark';
+  const accent = localStorage.getItem('yapper-accent') || 'iris';
+  let modal = document.getElementById('theme-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'theme-modal';
+    modal.className = 'modal-overlay';
+    modal.innerHTML = `
+      <div class="modal" style="max-width:480px" onclick="event.stopPropagation()">
+        <button class="modal-close" onclick="document.getElementById('theme-modal').style.display='none'">✕</button>
+        <h2 style="margin-bottom:20px">Customize your view</h2>
+
+        <div class="theme-section">
+          <h3>Background</h3>
+          <div class="theme-options">
+            <button class="theme-option" data-theme="dark"  onclick="pickTheme('dark')">
+              <div class="theme-preview theme-preview-dark"></div>
+              <span>Dark</span>
+            </button>
+            <button class="theme-option" data-theme="light" onclick="pickTheme('light')">
+              <div class="theme-preview theme-preview-light"></div>
+              <span>Light</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="theme-section" style="margin-bottom:0">
+          <h3>Color accent</h3>
+          <div class="accent-options">
+            <button class="accent-option" data-accent="iris"   onclick="pickAccent('iris')">
+              <div class="accent-swatch accent-iris"></div><span>Iris</span>
+            </button>
+            <button class="accent-option" data-accent="sunset" onclick="pickAccent('sunset')">
+              <div class="accent-swatch accent-sunset"></div><span>Sunset</span>
+            </button>
+            <button class="accent-option" data-accent="forest" onclick="pickAccent('forest')">
+              <div class="accent-swatch accent-forest"></div><span>Forest</span>
+            </button>
+            <button class="accent-option" data-accent="mono"   onclick="pickAccent('mono')">
+              <div class="accent-swatch accent-mono"></div><span>Mono</span>
+            </button>
+          </div>
+        </div>
+      </div>`;
+    modal.addEventListener('click', (e) => { if (e.target === modal) modal.style.display = 'none'; });
+    document.body.appendChild(modal);
+  }
+  modal.querySelectorAll('.theme-option').forEach(b => b.classList.toggle('selected', b.dataset.theme === (localStorage.getItem('yapper-theme') || 'dark')));
+  modal.querySelectorAll('.accent-option').forEach(b => b.classList.toggle('selected', b.dataset.accent === (localStorage.getItem('yapper-accent') || 'iris')));
+  modal.style.display = 'flex';
+}
+
+function pickTheme(theme) {
+  setYapperTheme(theme);
+  document.querySelectorAll('#theme-modal .theme-option').forEach(b => b.classList.toggle('selected', b.dataset.theme === theme));
+}
+function pickAccent(accent) {
+  setYapperAccent(accent);
+  document.querySelectorAll('#theme-modal .accent-option').forEach(b => b.classList.toggle('selected', b.dataset.accent === accent));
+}
+
 const SUPABASE_URL = 'https://fcnahusuafrxppxwrfau.supabase.co';
 // Get a free Giphy key: developers.giphy.com → Log in → Create an App → API Key
 const GIPHY_KEY = 'RRX4WFoj81k1wqEbRwvKhxjvJKFFcSxn';

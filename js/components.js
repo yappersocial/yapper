@@ -74,6 +74,10 @@ function sidebarHtml(active, profile) {
           <svg viewBox="0 0 24 24" fill="currentColor" style="width:18px;height:18px"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/></svg>
           Admin panel
         </a>` : ''}
+        <button onclick="openThemeModal()">
+          <svg viewBox="0 0 24 24" fill="currentColor" style="width:18px;height:18px"><path d="M12 3a9 9 0 1 0 9 9c0-.46-.04-.92-.1-1.36a5.389 5.389 0 0 1-4.4 2.26 5.403 5.403 0 0 1-3.14-9.8c-.44-.06-.9-.1-1.36-.1z"/></svg>
+          Display
+        </button>
         <hr>
         <button class="danger" onclick="yapperLogout()">
           <svg viewBox="0 0 24 24" fill="currentColor" style="width:18px;height:18px"><path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/></svg>
