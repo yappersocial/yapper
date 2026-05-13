@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C \"C:/Users/SurfaceLaptop3/Yapper2\" remote -v)"
+    ]
+  }
+}
