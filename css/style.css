@@ -180,6 +180,9 @@ input, textarea { font-family: inherit; }
 }
 .btn-outline:hover { background: rgba(239,243,244,0.1); }
 .btn-outline.following { border-color: var(--border); }
+.btn-outline.following:hover { background: rgba(244,33,46,0.1); border-color: var(--danger); color: var(--danger); }
+.btn-outline.blocking { border-color: var(--danger); color: var(--danger); background: rgba(244,33,46,0.1); }
+.btn-outline.blocking:hover { background: rgba(244,33,46,0.2); }
 .profile-name { font-size: 20px; font-weight: 700; }
 .profile-username { color: var(--text2); font-size: 15px; margin-top: 2px; }
 .profile-bio { margin-top: 12px; font-size: 15px; line-height: 1.5; }
@@ -482,3 +485,48 @@ input, textarea { font-family: inherit; }
 .new-dm-results { max-height: 300px; overflow-y: auto; }
 .new-dm-user { display: flex; align-items: center; gap: 12px; padding: 10px; border-radius: 12px; cursor: pointer; transition: background 0.15s; }
 .new-dm-user:hover { background: rgba(239,243,244,0.08); }
+
+/* ── Repost + Bookmark buttons ───────────────────────────── */
+.action-btn:hover.repost-btn { color: var(--success); background: rgba(0,186,124,0.1); }
+.action-btn.reposted { color: var(--success); }
+.action-btn.reposted svg { stroke: var(--success); }
+.action-btn:hover.bookmark-btn { color: #ffd400; background: rgba(255,212,0,0.1); }
+.action-btn.bookmarked { color: #ffd400; }
+.action-btn.bookmarked svg { fill: #ffd400; stroke: #ffd400; }
+
+/* ── Repost header ───────────────────────────────────────── */
+.repost-header {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 13px; color: var(--text2); font-weight: 600;
+  padding: 0 0 6px 52px; margin-top: -4px;
+}
+.repost-header svg { width: 14px; height: 14px; flex-shrink: 0; }
+
+/* ── Quote post card ─────────────────────────────────────── */
+.quote-card {
+  border: 1px solid var(--border); border-radius: 12px;
+  padding: 10px 12px; margin-top: 8px; cursor: pointer;
+  transition: background 0.15s;
+}
+.quote-card:hover { background: rgba(239,243,244,0.05); }
+.quote-card-header { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.quote-card-header .avatar, .quote-card-header .avatar-placeholder { flex-shrink: 0; }
+.quote-name { font-weight: 700; font-size: 14px; display: flex; align-items: center; gap: 2px; }
+.quote-handle { color: var(--text2); font-size: 13px; }
+.quote-text { font-size: 14px; color: var(--text); line-height: 1.4; word-break: break-word; white-space: pre-wrap; }
+
+/* ── Trending hashtag chips ──────────────────────────────── */
+.trending-section { padding: 16px; border-bottom: 1px solid var(--border); }
+.trending-section h3 { font-size: 20px; font-weight: 700; margin-bottom: 12px; }
+.hashtag-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.hashtag-chip {
+  background: rgba(29,155,240,0.1); color: var(--accent);
+  border: 1px solid rgba(29,155,240,0.3); border-radius: 9999px;
+  padding: 6px 14px; font-size: 14px; font-weight: 600;
+  cursor: pointer; transition: background 0.15s; text-decoration: none;
+}
+.hashtag-chip:hover { background: rgba(29,155,240,0.2); }
+
+/* ── Bookmarks page ──────────────────────────────────────── */
+.bookmarks-empty { text-align: center; padding: 48px 24px; color: var(--text2); }
+.bookmarks-empty svg { width: 48px; height: 48px; margin-bottom: 12px; opacity: 0.4; }

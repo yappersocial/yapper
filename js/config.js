@@ -24,6 +24,21 @@ async function getCurrentProfile() {
   return data;
 }
 
+// Batch-fetches original posts for any reposts/quotes in the array.
+// Attaches .original_post and sets liked_by_me/likes_count on originals.
+async function attachOriginals(posts, myId) {
+  const ids = [...new Set(posts.filter(p => p.repost_of).map(p => p.repost_of))];
+  if (!ids.length) return posts;
+  const { data } = await _supabase.from('posts')
+    .select(`*, profiles!user_id(id,username,display_name,avatar_url,is_verified,is_admin,is_super_admin), likes(user_id)`)
+    .in('id', ids);
+  const map = {};
+  for (const p of (data || [])) {
+    map[p.id] = { ...p, liked_by_me: (p.likes||[]).some(l => l.user_id === myId), likes_count: (p.likes||[]).length };
+  }
+  return posts.map(p => p.repost_of ? { ...p, original_post: map[p.repost_of] || null } : p);
+}
+
 function timeAgo(dateStr) {
   const now = new Date();
   const date = new Date(dateStr);

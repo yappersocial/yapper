@@ -14,16 +14,24 @@ function badgeHtml(profile) {
   return '';
 }
 
+// Escapes text and turns #hashtags into clickable links
+function hashtagify(text) {
+  if (!text) return '';
+  return escapeHtml(text).replace(/#(\w+)/g,
+    '<a href="explore.html?q=%23$1" onclick="event.stopPropagation()" style="color:var(--accent)">#$1</a>');
+}
+
 function sidebarHtml(active, profile) {
   const navItems = [
     { href: 'home.html',   id: 'home',          label: 'Home',          icon: `<path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/>` },
     { href: 'explore.html',id: 'explore',        label: 'Explore',       icon: `<path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>` },
     { href: 'notifications.html', id: 'notifications', label: 'Notifications', icon: `<path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/>` },
     { href: 'dm.html',     id: 'dm',            label: 'Messages',      icon: `<path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/>` },
+    { href: 'bookmarks.html', id: 'bookmarks',  label: 'Bookmarks',     icon: `<path d="M17 3H7c-1.1 0-2 .9-2 2v16l7-3 7 3V5c0-1.1-.9-2-2-2z"/>` },
     { href: `profile.html?id=${profile ? profile.id : ''}`, id: 'profile', label: 'Profile', icon: `<path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>` },
   ];
 
-  const adminItem = profile && profile.is_admin
+  const adminItem = profile && (profile.is_admin || profile.is_super_admin)
     ? `<a href="admin.html" class="nav-item ${active==='admin'?'active':''}">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/></svg>
         <span>Admin</span></a>` : '';
@@ -57,7 +65,11 @@ function sidebarHtml(active, profile) {
           <svg viewBox="0 0 24 24" fill="currentColor" style="width:18px;height:18px"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/></svg>
           Messages
         </a>
-        ${profile.is_admin ? `<a href="admin.html">
+        <a href="bookmarks.html">
+          <svg viewBox="0 0 24 24" fill="currentColor" style="width:18px;height:18px"><path d="M17 3H7c-1.1 0-2 .9-2 2v16l7-3 7 3V5c0-1.1-.9-2-2-2z"/></svg>
+          Bookmarks
+        </a>
+        ${profile.is_admin || profile.is_super_admin ? `<a href="admin.html">
           <svg viewBox="0 0 24 24" fill="currentColor" style="width:18px;height:18px"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/></svg>
           Admin panel
         </a>` : ''}
@@ -92,38 +104,86 @@ function asideHtml() {
 
 function postHtml(post, currentUserId) {
   const liked = post.liked_by_me;
-  const profile = post.profiles;
-  const mediaHtml = post.media_url ? `
-    <div class="post-media" onclick="event.stopPropagation()">
-      ${post.media_type === 'video'
-        ? `<video src="${escapeHtml(post.media_url)}" controls preload="none"></video>`
-        : `<img src="${escapeHtml(post.media_url)}" alt="" loading="lazy">`}
+  const bookmarked = window._bookmarks?.has(post.id);
+  const isSimpleRepost = !!post.repost_of && !post.content;
+  const isQuote       = !!post.repost_of &&  !!post.content;
+  const orig          = post.original_post;
+
+  // For a simple repost, display the original's data as the main content
+  const dp    = (isSimpleRepost && orig) ? orig.profiles : post.profiles; // display profile
+  const dc    = isSimpleRepost ? (orig?.content || null) : post.content;   // display content
+  const dmu   = isSimpleRepost ? (orig?.media_url || null) : post.media_url;
+  const dmt   = isSimpleRepost ? (orig?.media_type || null) : post.media_type;
+  const dTime = isSimpleRepost ? (orig?.created_at || post.created_at) : post.created_at;
+  const dId   = isSimpleRepost ? (orig?.id || post.id) : post.id;
+  const dLiked = isSimpleRepost ? (orig?.liked_by_me || false) : liked;
+  const dCount = isSimpleRepost ? (orig?.likes_count || 0) : (post.likes_count || 0);
+
+  const hasReposted = window._reposts?.has(dId);
+  const myRepostId  = window._reposts?.get(dId);
+
+  const repostHeader = post.repost_of ? `
+    <div class="repost-header">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 20H2v-10h5m0 10-3-3m3 3 3-3M17 4h5v10h-5m0-10 3 3m-3-3-3 3"/></svg>
+      ${escapeHtml(post.profiles.display_name || post.profiles.username)} reposted
     </div>` : '';
+
+  const mediaHtml = dmu ? `
+    <div class="post-media" onclick="event.stopPropagation()">
+      ${dmt === 'video'
+        ? `<video src="${escapeHtml(dmu)}" controls preload="none"></video>`
+        : `<img src="${escapeHtml(dmu)}" alt="" loading="lazy">`}
+    </div>` : '';
+
+  // Embedded original card for quote posts
+  const quoteHtml = (isQuote && orig) ? `
+    <div class="quote-card" onclick="event.stopPropagation();window.location.href='post.html?id=${orig.id}'">
+      <div class="quote-card-header">
+        ${avatarHtml(orig.profiles || {}, 18)}
+        <span class="quote-name">${escapeHtml(orig.profiles?.display_name || orig.profiles?.username || 'Unknown')}${badgeHtml(orig.profiles||{})}</span>
+        <span class="quote-handle">@${escapeHtml(orig.profiles?.username || '')}</span>
+      </div>
+      ${orig.content ? `<div class="quote-text">${hashtagify(orig.content)}</div>` : ''}
+      ${orig.media_url ? `<img src="${escapeHtml(orig.media_url)}" style="width:100%;border-radius:8px;margin-top:6px;max-height:160px;object-fit:cover;display:block" alt="">` : ''}
+    </div>` : '';
+
   return `
-    <div class="post" data-post-id="${post.id}" onclick="openPost('${post.id}',event)">
-      <a href="profile.html?id=${profile.id}" onclick="event.stopPropagation()">${avatarHtml(profile, 40)}</a>
+    <div class="post" data-post-id="${post.id}" onclick="openPost('${dId}',event)">
+      ${repostHeader}
+      <a href="profile.html?id=${dp.id}" onclick="event.stopPropagation()">${avatarHtml(dp, 40)}</a>
       <div class="post-content">
         <div class="post-header">
-          <a href="profile.html?id=${profile.id}" style="display:inline-flex;align-items:center;gap:2px;font-weight:700;font-size:15px" onclick="event.stopPropagation()">${escapeHtml(profile.display_name||profile.username)}${badgeHtml(profile)}</a>
+          <a href="profile.html?id=${dp.id}" style="display:inline-flex;align-items:center;gap:2px;font-weight:700;font-size:15px" onclick="event.stopPropagation()">${escapeHtml(dp.display_name||dp.username)}${badgeHtml(dp)}</a>
           <span class="dot">·</span>
-          <span class="username">@${escapeHtml(profile.username)}</span>
+          <span class="username">@${escapeHtml(dp.username)}</span>
           <span class="dot">·</span>
-          <span class="time">${timeAgo(post.created_at)}</span>
+          <span class="time">${timeAgo(dTime)}</span>
         </div>
-        ${post.content ? `<div class="post-text">${escapeHtml(post.content)}</div>` : ''}
+        ${dc ? `<div class="post-text">${hashtagify(dc)}</div>` : ''}
         ${mediaHtml}
+        ${quoteHtml}
         <div class="post-actions">
-          <button class="action-btn reply-btn" onclick="event.stopPropagation();replyToPost('${post.id}')">
+          <button class="action-btn reply-btn" onclick="event.stopPropagation();replyToPost('${dId}')">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
             <span>${post.replies_count||0}</span>
           </button>
-          <button class="action-btn like-btn ${liked?'liked':''}" onclick="event.stopPropagation();toggleLike('${post.id}',this)" data-liked="${liked?'1':'0'}" data-count="${post.likes_count||0}">
-            <svg viewBox="0 0 24 24" fill="${liked?'currentColor':'none'}" stroke="currentColor" stroke-width="1.75"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
-            <span>${post.likes_count||0}</span>
+          <button class="action-btn repost-btn ${hasReposted?'reposted':''}"
+            onclick="event.stopPropagation();toggleRepost('${dId}','${myRepostId||''}',this)"
+            data-reposted="${hasReposted?'1':'0'}" title="${hasReposted?'Undo repost':'Repost'}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+          </button>
+          <button class="action-btn like-btn ${dLiked?'liked':''}" onclick="event.stopPropagation();toggleLike('${dId}',this)" data-liked="${dLiked?'1':'0'}" data-count="${dCount}">
+            <svg viewBox="0 0 24 24" fill="${dLiked?'currentColor':'none'}" stroke="currentColor" stroke-width="1.75"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+            <span>${dCount}</span>
+          </button>
+          <button class="action-btn bookmark-btn ${bookmarked?'bookmarked':''}"
+            onclick="event.stopPropagation();toggleBookmark('${post.id}',this)"
+            data-bookmarked="${bookmarked?'1':'0'}" title="${bookmarked?'Remove bookmark':'Bookmark'}">
+            <svg viewBox="0 0 24 24" fill="${bookmarked?'currentColor':'none'}" stroke="currentColor" stroke-width="1.75"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
           </button>
           <button class="action-btn share-btn"
-            data-post-id="${post.id}"
-            data-post-content="${escapeHtml((post.content||'').slice(0,120))}"
+            data-post-id="${dId}"
+            data-post-content="${escapeHtml(((dc||'')).slice(0,120))}"
             onclick="event.stopPropagation();openShareMenu(this,event)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
           </button>
@@ -135,6 +195,105 @@ function postHtml(post, currentUserId) {
         </div>
       </div>
     </div>`;
+}
+
+// ── Repost toggle ─────────────────────────────────────────────
+async function toggleRepost(originalPostId, myRepostId, btn) {
+  const hasReposted = btn.dataset.reposted === '1';
+  btn.disabled = true;
+  if (hasReposted && myRepostId) {
+    const { error } = await _supabase.from('posts').delete().eq('id', myRepostId);
+    if (error) { showToast('Error: ' + error.message); btn.disabled = false; return; }
+    window._reposts?.delete(originalPostId);
+    btn.dataset.reposted = '0';
+    btn.classList.remove('reposted');
+    btn.title = 'Repost';
+  } else {
+    const { data, error } = await _supabase.from('posts').insert({
+      user_id: window.currentProfile.id,
+      repost_of: originalPostId,
+      content: null
+    }).select('id').single();
+    if (error) { showToast('Error: ' + error.message); btn.disabled = false; return; }
+    window._reposts = window._reposts || new Map();
+    window._reposts.set(originalPostId, data.id);
+    btn.dataset.reposted = '1';
+    btn.classList.add('reposted');
+    btn.title = 'Undo repost';
+    showToast('Reposted!');
+  }
+  btn.disabled = false;
+}
+
+// ── Quote post modal ──────────────────────────────────────────
+let _quotePostId = null;
+
+function openQuoteModal(postId, previewText) {
+  _quotePostId = postId;
+  let modal = document.getElementById('quote-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'quote-modal';
+    modal.className = 'modal-overlay';
+    modal.innerHTML = `
+      <div class="modal" style="max-width:500px" onclick="event.stopPropagation()">
+        <button class="modal-close" onclick="document.getElementById('quote-modal').style.display='none'">✕</button>
+        <h2 style="margin-bottom:16px">Quote Yap</h2>
+        <textarea id="quote-text" placeholder="Add a comment…" maxlength="280"
+          style="width:100%;background:none;border:none;outline:none;color:var(--text);font-size:17px;resize:none;min-height:80px;font-family:inherit;margin-bottom:12px"
+          oninput="document.getElementById('quote-send').disabled=!this.value.trim()"></textarea>
+        <div class="quote-card" id="quote-preview" style="cursor:default;margin-bottom:16px"></div>
+        <button class="btn-accent" id="quote-send" onclick="submitQuote()" disabled>Quote Yap</button>
+      </div>`;
+    modal.addEventListener('click', e => { if (e.target === modal) modal.style.display = 'none'; });
+    document.body.appendChild(modal);
+  }
+  document.getElementById('quote-text').value = '';
+  document.getElementById('quote-send').disabled = true;
+  document.getElementById('quote-preview').textContent = previewText ? `"${previewText}"` : '(media post)';
+  modal.style.display = 'flex';
+}
+
+async function submitQuote() {
+  const content = document.getElementById('quote-text').value.trim();
+  if (!content || !_quotePostId) return;
+  const btn = document.getElementById('quote-send');
+  btn.disabled = true; btn.textContent = 'Posting…';
+  const { error } = await _supabase.from('posts').insert({
+    user_id: window.currentProfile.id,
+    content,
+    repost_of: _quotePostId
+  });
+  if (error) { showToast('Error: ' + error.message); btn.disabled = false; btn.textContent = 'Quote Yap'; return; }
+  document.getElementById('quote-modal').style.display = 'none';
+  showToast('Quoted!');
+  btn.textContent = 'Quote Yap';
+  if (typeof loadFeed === 'function') loadFeed();
+}
+
+// ── Bookmark toggle ───────────────────────────────────────────
+async function toggleBookmark(postId, btn) {
+  const isBookmarked = btn.dataset.bookmarked === '1';
+  btn.disabled = true;
+  if (isBookmarked) {
+    await _supabase.from('bookmarks').delete().eq('user_id', window.currentProfile.id).eq('post_id', postId);
+    window._bookmarks?.delete(postId);
+    btn.dataset.bookmarked = '0';
+    btn.classList.remove('bookmarked');
+    btn.querySelector('svg').setAttribute('fill', 'none');
+    btn.title = 'Bookmark';
+    showToast('Bookmark removed');
+  } else {
+    await _supabase.from('bookmarks').insert({ user_id: window.currentProfile.id, post_id: postId });
+    window._bookmarks = window._bookmarks || new Set();
+    window._bookmarks.add(postId);
+    btn.dataset.bookmarked = '1';
+    btn.classList.add('bookmarked');
+    btn.querySelector('svg').setAttribute('fill', 'currentColor');
+    btn.title = 'Remove bookmark';
+    showToast('Bookmarked!');
+  }
+  btn.disabled = false;
 }
 
 // ── Share menu ────────────────────────────────────────────────
@@ -153,6 +312,10 @@ function openShareMenu(btn, e) {
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z"/></svg>
         Copy link
       </div>
+      <div class="share-menu-item" onclick="openQuoteModal(_sharePost.id, _sharePost.content);document.getElementById('share-menu').style.display='none'">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h5v2h8v-2h5c1.1 0 1.99-.9 1.99-2L23 5c0-1.1-.9-2-2-2zm-2 12H5V7h14v8z"/></svg>
+        Quote Yap
+      </div>
       <div class="share-menu-item" onclick="openShareDMModal()">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/></svg>
         Send via DM
@@ -161,7 +324,7 @@ function openShareMenu(btn, e) {
     document.addEventListener('click', () => { menu.style.display = 'none'; });
   }
   const rect = btn.getBoundingClientRect();
-  const menuH = 100;
+  const menuH = 140;
   const top = rect.bottom + 4 + menuH > window.innerHeight ? rect.top - menuH - 4 : rect.bottom + 4;
   menu.style.cssText = `display:block;top:${top}px;left:${Math.min(rect.left, window.innerWidth - 224)}px`;
 }
@@ -212,7 +375,7 @@ async function searchShareUsers(q) {
   if (!q.trim()) { list.innerHTML = '<p style="color:var(--text2);text-align:center;padding:16px;font-size:14px">Type a name or username</p>'; return; }
   _shareDMSearchTimer = setTimeout(async () => {
     const me = window.currentProfile?.id;
-    const { data } = await _supabase.from('profiles').select('id,username,display_name,avatar_url,is_verified,is_admin')
+    const { data } = await _supabase.from('profiles').select('id,username,display_name,avatar_url,is_verified,is_admin,is_super_admin')
       .or(`username.ilike.%${q}%,display_name.ilike.%${q}%`).neq('id', me || '').limit(8);
     if (!data?.length) { list.innerHTML = '<p style="color:var(--text2);text-align:center;padding:16px;font-size:14px">No users found</p>'; return; }
     list.innerHTML = data.map(u => `
@@ -248,6 +411,16 @@ async function sendShareDM() {
   btn.textContent = 'Send';
 }
 
+// ── Feed delete ───────────────────────────────────────────────
+async function feedDeletePost(postId) {
+  if (!confirm('Delete this Yap?')) return;
+  const { error } = await _supabase.from('posts').delete().eq('id', postId);
+  if (error) { showToast('Error: ' + error.message); return; }
+  const el = document.querySelector(`[data-post-id="${postId}"]`);
+  if (el) el.remove();
+  showToast('Yap deleted');
+}
+
 // ── Sidebar dropdown ──────────────────────────────────────────
 function toggleSidebarDropdown(e) {
   e.stopPropagation();
@@ -274,16 +447,6 @@ function openPost(postId, e) {
   if (e && e.target.closest('a,button')) return;
   window.location.href = `post.html?id=${postId}`;
 }
-
-async function feedDeletePost(postId) {
-  if (!confirm('Delete this Yap?')) return;
-  const { error } = await _supabase.from('posts').delete().eq('id', postId);
-  if (error) { showToast('Error: ' + error.message); return; }
-  const el = document.querySelector(`[data-post-id="${postId}"]`);
-  if (el) el.remove();
-  showToast('Yap deleted');
-}
-// legacy alias kept so old inline calls don't break
 function sharePost(postId) {
   const url = new URL(`post.html?id=${postId}`, window.location.href).href;
   navigator.clipboard.writeText(url).then(()=>showToast('Link copied!')).catch(()=>showToast('Could not copy'));

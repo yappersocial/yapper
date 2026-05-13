@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bookmarks / Yapper</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/config.js"></script>
+<script src="js/components.js"></script>
+</head>
+<body>
+<div class="layout">
+  <nav class="sidebar" id="sidebar"></nav>
+  <main class="main">
+    <div class="feed-header" style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px">
+      <h2 style="font-size:20px;font-weight:700">Bookmarks</h2>
+      <button onclick="clearAllBookmarks()" style="color:var(--danger);font-size:14px;font-weight:600;padding:6px 12px;border-radius:9999px;border:1px solid var(--danger);transition:background 0.2s" onmouseover="this.style.background='rgba(244,33,46,0.1)'" onmouseout="this.style.background='none'">Clear all</button>
+    </div>
+    <div id="bookmarks-feed"><div class="loading"><div class="spinner"></div></div></div>
+  </main>
+  <aside class="aside" id="aside"></aside>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+let currentProfile = null;
+
+async function init() {
+  const session = await requireAuth();
+  if (!session) return;
+  currentProfile = await getCurrentProfile();
+  window.currentProfile = currentProfile;
+  if (!currentProfile?.username) { window.location.href = 'setup.html'; return; }
+
+  document.getElementById('sidebar').innerHTML = sidebarHtml('bookmarks', currentProfile);
+  document.getElementById('aside').innerHTML = asideHtml();
+  document.getElementById('compose-nav-btn').addEventListener('click', () => window.location.href='home.html');
+  document.getElementById('aside-search').addEventListener('keydown', e => {
+    if (e.key === 'Enter') window.location.href = `explore.html?q=${encodeURIComponent(e.target.value)}`;
+  });
+
+  const [bkRes, blRes, rpRes] = await Promise.all([
+    _supabase.from('bookmarks').select('post_id').eq('user_id', currentProfile.id),
+    _supabase.from('blocks').select('blocked_id').eq('blocker_id', currentProfile.id),
+    _supabase.from('posts').select('id,repost_of').eq('user_id', currentProfile.id).not('repost_of', 'is', null)
+  ]);
+  window._bookmarks = new Set((bkRes.data||[]).map(b => b.post_id));
+  window._blocked   = new Set((blRes.data||[]).map(b => b.blocked_id));
+  window._reposts   = new Map((rpRes.data||[]).map(r => [r.repost_of, r.id]));
+
+  await loadBookmarks();
+}
+
+async function loadBookmarks() {
+  document.getElementById('bookmarks-feed').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  const { data, error } = await _supabase.from('bookmarks')
+    .select(`post_id, posts(*, profiles!user_id(id,username,display_name,avatar_url,is_verified,is_admin,is_super_admin), likes(user_id))`)
+    .eq('user_id', currentProfile.id)
+    .order('created_at', { ascending: false })
+    .limit(100);
+
+  if (error) { document.getElementById('bookmarks-feed').innerHTML = `<div class="empty-state"><p>${escapeHtml(error.message)}</p></div>`; return; }
+
+  let posts = (data||[]).map(r => r.posts).filter(Boolean).map(p => ({
+    ...p,
+    liked_by_me: (p.likes||[]).some(l => l.user_id === currentProfile.id),
+    likes_count: (p.likes||[]).length
+  }));
+
+  posts = await attachOriginals(posts, currentProfile.id);
+
+  if (!posts.length) {
+    document.getElementById('bookmarks-feed').innerHTML = `
+      <div class="bookmarks-empty">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+        <h3 style="font-size:22px;font-weight:700;color:var(--text);margin-bottom:8px">No bookmarks yet</h3>
+        <p>Save Yaps you want to come back to.</p>
+      </div>`;
+    return;
+  }
+
+  document.getElementById('bookmarks-feed').innerHTML = posts.map(p => postHtml(p, currentProfile.id)).join('');
+}
+
+async function clearAllBookmarks() {
+  if (!confirm('Remove all bookmarks?')) return;
+  await _supabase.from('bookmarks').delete().eq('user_id', currentProfile.id);
+  window._bookmarks = new Set();
+  await loadBookmarks();
+  showToast('All bookmarks cleared');
+}
+
+async function toggleLike(postId, btn) {
+  const liked = btn.dataset.liked === '1';
+  const count = parseInt(btn.dataset.count) || 0;
+  const newLiked = !liked, newCount = newLiked ? count+1 : count-1;
+  btn.dataset.liked = newLiked?'1':'0'; btn.dataset.count = newCount;
+  btn.classList.toggle('liked', newLiked);
+  btn.querySelector('svg').setAttribute('fill', newLiked ? 'currentColor' : 'none');
+  btn.querySelector('span').textContent = newCount;
+  if (newLiked) await _supabase.from('likes').insert({ user_id: currentProfile.id, post_id: postId });
+  else await _supabase.from('likes').delete().eq('user_id', currentProfile.id).eq('post_id', postId);
+}
+function replyToPost(postId) { window.location.href = `post.html?id=${postId}`; }
+
+init();
+</script>
+</body>
+</html>

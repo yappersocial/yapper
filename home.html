@@ -67,6 +67,16 @@ async function init() {
   document.getElementById('aside').innerHTML = asideHtml();
   document.getElementById('compose-nav-btn').addEventListener('click', () => document.getElementById('compose-text').focus());
 
+  // Load bookmarks, blocks, and reposts state for use in postHtml
+  const [bkRes, blRes, rpRes] = await Promise.all([
+    _supabase.from('bookmarks').select('post_id').eq('user_id', currentProfile.id),
+    _supabase.from('blocks').select('blocked_id').eq('blocker_id', currentProfile.id),
+    _supabase.from('posts').select('id,repost_of').eq('user_id', currentProfile.id).not('repost_of', 'is', null)
+  ]);
+  window._bookmarks = new Set((bkRes.data||[]).map(b => b.post_id));
+  window._blocked   = new Set((blRes.data||[]).map(b => b.blocked_id));
+  window._reposts   = new Map((rpRes.data||[]).map(r => [r.repost_of, r.id]));
+
   loadFeed();
   loadSuggestions();
   document.getElementById('aside-search').addEventListener('keydown', e => {
@@ -87,7 +97,7 @@ async function loadFeed() {
   document.getElementById('feed').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
 
   let query = _supabase.from('posts')
-    .select(`*, profiles!user_id(id,username,display_name,avatar_url,is_verified,is_admin), likes(user_id)`)
+    .select(`*, profiles!user_id(id,username,display_name,avatar_url,is_verified,is_admin,is_super_admin), likes(user_id)`)
     .is('reply_to', null)
     .order('created_at', { ascending: false })
     .limit(50);
@@ -103,11 +113,21 @@ async function loadFeed() {
   loadingFeed = false;
   if (error) { document.getElementById('feed').innerHTML = `<div class="empty-state"><p>Error: ${escapeHtml(error.message)}</p></div>`; return; }
 
-  posts = (data || []).map(p => ({
+  let rawPosts = (data || []).map(p => ({
     ...p,
     liked_by_me: (p.likes||[]).some(l => l.user_id === currentProfile.id),
     likes_count: (p.likes||[]).length
   }));
+
+  // Filter out blocked users' posts
+  if (window._blocked?.size) rawPosts = rawPosts.filter(p => !window._blocked.has(p.user_id));
+
+  // Attach original posts for reposts/quotes
+  rawPosts = await attachOriginals(rawPosts, currentProfile.id);
+  // Also filter blocked originals
+  if (window._blocked?.size) rawPosts = rawPosts.filter(p => !p.repost_of || !window._blocked.has(p.original_post?.user_id));
+
+  posts = rawPosts;
 
   if (!posts.length) {
     const msg = currentTab === 'following'

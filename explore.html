@@ -23,6 +23,7 @@
       <div class="tabs">
         <div class="tab active" id="tab-posts" onclick="switchSearch('posts')">Yaps</div>
         <div class="tab" id="tab-people" onclick="switchSearch('people')">People</div>
+        <div class="tab" id="tab-trending" onclick="switchSearch('trending')">Trending</div>
       </div>
     </div>
     <div id="explore-results"><div class="loading"><div class="spinner"></div></div></div>
@@ -35,6 +36,9 @@
 let currentProfile = null;
 let searchMode = 'posts';
 let searchTimer;
+window._bookmarks = new Set();
+window._blocked   = new Set();
+window._reposts   = new Map();
 
 async function init() {
   const session = await requireAuth();
@@ -45,6 +49,15 @@ async function init() {
   document.getElementById('sidebar').innerHTML = sidebarHtml('explore', currentProfile);
   document.getElementById('aside').innerHTML = asideHtml();
   document.getElementById('compose-nav-btn').addEventListener('click', () => window.location.href='home.html');
+
+  const [bkRes, blRes, rpRes] = await Promise.all([
+    _supabase.from('bookmarks').select('post_id').eq('user_id', currentProfile.id),
+    _supabase.from('blocks').select('blocked_id').eq('blocker_id', currentProfile.id),
+    _supabase.from('posts').select('id,repost_of').eq('user_id', currentProfile.id).not('repost_of', 'is', null)
+  ]);
+  window._bookmarks = new Set((bkRes.data||[]).map(b => b.post_id));
+  window._blocked   = new Set((blRes.data||[]).map(b => b.blocked_id));
+  window._reposts   = new Map((rpRes.data||[]).map(r => [r.repost_of, r.id]));
 
   const params = new URLSearchParams(window.location.search);
   const q = params.get('q');
@@ -70,18 +83,49 @@ function switchSearch(mode) {
   searchMode = mode;
   document.getElementById('tab-posts').classList.toggle('active', mode==='posts');
   document.getElementById('tab-people').classList.toggle('active', mode==='people');
+  document.getElementById('tab-trending').classList.toggle('active', mode==='trending');
   const q = document.getElementById('search-input').value.trim();
+  if (mode === 'trending') { loadTrendingHashtags(); return; }
   if (q) doSearch(q); else loadTrending();
 }
 
 async function loadTrending() {
   document.getElementById('explore-results').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
   const { data, error } = await _supabase.from('posts')
-    .select(`*, profiles!user_id(id,username,display_name,avatar_url,is_verified,is_admin), likes(user_id)`)
+    .select(`*, profiles!user_id(id,username,display_name,avatar_url,is_verified,is_admin,is_super_admin), likes(user_id)`)
+    .is('reply_to', null)
     .order('created_at', { ascending: false })
     .limit(30);
   if (error) { document.getElementById('explore-results').innerHTML = `<div class="empty-state"><p>${escapeHtml(error.message)}</p></div>`; return; }
-  renderPosts(data || []);
+  let posts = (data||[]);
+  if (window._blocked?.size) posts = posts.filter(p => !window._blocked.has(p.user_id));
+  posts = await attachOriginals(posts, currentProfile.id);
+  renderPosts(posts);
+}
+
+async function loadTrendingHashtags() {
+  document.getElementById('explore-results').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  const { data } = await _supabase.from('posts').select('content').not('content', 'is', null)
+    .order('created_at', { ascending: false }).limit(500);
+  const counts = {};
+  for (const p of (data||[])) {
+    const tags = (p.content.match(/#(\w+)/gi) || []).map(t => t.toLowerCase());
+    for (const t of tags) counts[t] = (counts[t]||0) + 1;
+  }
+  const sorted = Object.entries(counts).sort((a,b) => b[1]-a[1]).slice(0, 20);
+  if (!sorted.length) {
+    document.getElementById('explore-results').innerHTML = '<div class="empty-state"><h3>No trending topics yet</h3><p>Use #hashtags in your Yaps!</p></div>';
+    return;
+  }
+  document.getElementById('explore-results').innerHTML = `
+    <div class="trending-section">
+      <h3>Trending on Yapper</h3>
+      <div class="hashtag-chips">
+        ${sorted.map(([tag, count]) =>
+          `<a class="hashtag-chip" href="explore.html?q=${encodeURIComponent(tag)}">${escapeHtml(tag)} <span style="opacity:0.6;font-weight:400">${count}</span></a>`
+        ).join('')}
+      </div>
+    </div>`;
 }
 
 async function doSearch(q) {
@@ -89,12 +133,15 @@ async function doSearch(q) {
   document.getElementById('explore-results').innerHTML = '<div class="loading"><div class="spinner"></div></div>';
   if (searchMode === 'posts') {
     const { data, error } = await _supabase.from('posts')
-      .select(`*, profiles!user_id(id,username,display_name,avatar_url,is_verified,is_admin), likes(user_id)`)
+      .select(`*, profiles!user_id(id,username,display_name,avatar_url,is_verified,is_admin,is_super_admin), likes(user_id)`)
       .ilike('content', `%${q}%`)
       .order('created_at', { ascending: false })
       .limit(50);
     if (error) { document.getElementById('explore-results').innerHTML = `<div class="empty-state"><p>${escapeHtml(error.message)}</p></div>`; return; }
-    renderPosts(data || []);
+    let posts = (data||[]);
+    if (window._blocked?.size) posts = posts.filter(p => !window._blocked.has(p.user_id));
+    posts = await attachOriginals(posts, currentProfile.id);
+    renderPosts(posts);
   } else {
     const { data, error } = await _supabase.from('profiles')
       .select('*')
@@ -106,7 +153,7 @@ async function doSearch(q) {
 }
 
 function renderPosts(data) {
-  const posts = data.map(p => ({ ...p, liked_by_me: (p.likes||[]).some(l=>l.user_id===currentProfile.id), likes_count:(p.likes||[]).length }));
+  const posts = data.map(p => p.liked_by_me !== undefined ? p : { ...p, liked_by_me: (p.likes||[]).some(l=>l.user_id===currentProfile.id), likes_count:(p.likes||[]).length });
   if (!posts.length) { document.getElementById('explore-results').innerHTML = '<div class="empty-state"><h3>No results</h3><p>Try different keywords.</p></div>'; return; }
   document.getElementById('explore-results').innerHTML = posts.map(p => postHtml(p, currentProfile.id)).join('');
 }

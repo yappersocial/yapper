@@ -67,6 +67,7 @@ async function init() {
   const session = await requireAuth();
   if (!session) return;
   currentProfile = await getCurrentProfile();
+  window.currentProfile = currentProfile;
   if (!currentProfile || !currentProfile.username) { window.location.href = 'setup.html'; return; }
 
   document.getElementById('sidebar').innerHTML = sidebarHtml('profile', currentProfile);
@@ -75,6 +76,15 @@ async function init() {
   document.getElementById('aside-search').addEventListener('keydown', e => {
     if (e.key === 'Enter') window.location.href = `explore.html?q=${encodeURIComponent(e.target.value)}`;
   });
+
+  const [bkRes, blRes, rpRes] = await Promise.all([
+    _supabase.from('bookmarks').select('post_id').eq('user_id', currentProfile.id),
+    _supabase.from('blocks').select('blocked_id').eq('blocker_id', currentProfile.id),
+    _supabase.from('posts').select('id,repost_of').eq('user_id', currentProfile.id).not('repost_of', 'is', null)
+  ]);
+  window._bookmarks = new Set((bkRes.data||[]).map(b => b.post_id));
+  window._blocked   = new Set((blRes.data||[]).map(b => b.blocked_id));
+  window._reposts   = new Map((rpRes.data||[]).map(r => [r.repost_of, r.id]));
 
   const id = profileId || currentProfile.id;
   await loadProfile(id);
@@ -93,16 +103,23 @@ async function loadProfile(id) {
   const { count: followersCount } = await _supabase.from('follows').select('*', { count: 'exact', head: true }).eq('following_id', id);
   const { count: followingCount } = await _supabase.from('follows').select('*', { count: 'exact', head: true }).eq('follower_id', id);
 
-  let isFollowing = false;
+  let isFollowing = false, isBlocked = false;
   if (id !== currentProfile.id) {
-    const { data: followRow } = await _supabase.from('follows').select('follower_id').eq('follower_id', currentProfile.id).eq('following_id', id).maybeSingle();
-    isFollowing = !!followRow;
+    const [followRow, blockRow] = await Promise.all([
+      _supabase.from('follows').select('follower_id').eq('follower_id', currentProfile.id).eq('following_id', id).maybeSingle(),
+      _supabase.from('blocks').select('id').eq('blocker_id', currentProfile.id).eq('blocked_id', id).maybeSingle()
+    ]);
+    isFollowing = !!followRow.data;
+    isBlocked   = !!blockRow.data;
   }
 
   const isOwn = id === currentProfile.id;
   const actionBtn = isOwn
     ? `<button class="btn-outline" onclick="openEditModal()">Edit profile</button>`
-    : `<button class="btn-outline ${isFollowing ? 'following' : ''}" id="follow-btn" onclick="toggleFollow('${id}',this)">${isFollowing ? 'Following' : 'Follow'}</button>`;
+    : `<div style="display:flex;gap:8px">
+        <button class="btn-outline ${isFollowing ? 'following' : ''}" id="follow-btn" onclick="toggleFollow('${id}',this)">${isFollowing ? 'Following' : 'Follow'}</button>
+        <button class="btn-outline ${isBlocked ? 'blocking' : ''}" id="block-btn" onclick="toggleBlock('${id}',this)" title="${isBlocked?'Unblock':'Block'} @${escapeHtml(profile.username)}">${isBlocked ? 'Blocked' : 'Block'}</button>
+       </div>`;
 
   document.getElementById('profile-content').innerHTML = `
     <div class="profile-banner">
@@ -142,14 +159,14 @@ async function loadProfilePosts(userId, tab) {
 
   if (tab === 'yaps') {
     const result = await _supabase.from('posts')
-      .select(`*, profiles!user_id(id,username,display_name,avatar_url,is_verified,is_admin), likes(user_id)`)
+      .select(`*, profiles!user_id(id,username,display_name,avatar_url,is_verified,is_admin,is_super_admin), likes(user_id)`)
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
       .limit(50);
     data = result.data; error = result.error;
   } else {
     const result = await _supabase.from('likes')
-      .select(`post_id, posts(*, profiles!user_id(id,username,display_name,avatar_url,is_verified,is_admin), likes(user_id))`)
+      .select(`post_id, posts(*, profiles!user_id(id,username,display_name,avatar_url,is_verified,is_admin,is_super_admin), likes(user_id))`)
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
       .limit(50);
@@ -159,7 +176,8 @@ async function loadProfilePosts(userId, tab) {
 
   if (error) { document.getElementById('profile-posts').innerHTML = `<div class="empty-state"><p>${escapeHtml(error.message)}</p></div>`; return; }
 
-  const posts = (data || []).map(p => ({ ...p, liked_by_me: (p.likes||[]).some(l=>l.user_id===currentProfile.id), likes_count:(p.likes||[]).length }));
+  let posts = (data || []).map(p => ({ ...p, liked_by_me: (p.likes||[]).some(l=>l.user_id===currentProfile.id), likes_count:(p.likes||[]).length }));
+  posts = await attachOriginals(posts, currentProfile.id);
   if (!posts.length) {
     document.getElementById('profile-posts').innerHTML = '<div class="empty-state"><h3>No Yaps yet</h3></div>';
     return;
@@ -177,6 +195,32 @@ async function toggleFollow(userId, btn) {
     await _supabase.from('follows').insert({ follower_id: currentProfile.id, following_id: userId });
     await _supabase.from('notifications').insert({ user_id: userId, type: 'follow', actor_id: currentProfile.id });
     btn.textContent = 'Following'; btn.classList.add('following');
+  }
+  btn.disabled = false;
+}
+
+async function toggleBlock(userId, btn) {
+  const isBlocking = btn.classList.contains('blocking');
+  btn.disabled = true;
+  if (isBlocking) {
+    await _supabase.from('blocks').delete().eq('blocker_id', currentProfile.id).eq('blocked_id', userId);
+    window._blocked?.delete(userId);
+    btn.textContent = 'Block'; btn.classList.remove('blocking');
+    showToast('User unblocked');
+  } else {
+    if (!confirm(`Block this user? Their posts won't appear in your feed.`)) { btn.disabled = false; return; }
+    await _supabase.from('blocks').insert({ blocker_id: currentProfile.id, blocked_id: userId });
+    // Also unfollow both ways
+    await Promise.all([
+      _supabase.from('follows').delete().eq('follower_id', currentProfile.id).eq('following_id', userId),
+      _supabase.from('follows').delete().eq('follower_id', userId).eq('following_id', currentProfile.id)
+    ]);
+    window._blocked = window._blocked || new Set();
+    window._blocked.add(userId);
+    btn.textContent = 'Blocked'; btn.classList.add('blocking');
+    const followBtn = document.getElementById('follow-btn');
+    if (followBtn) { followBtn.textContent = 'Follow'; followBtn.classList.remove('following'); }
+    showToast('User blocked');
   }
   btn.disabled = false;
 }
