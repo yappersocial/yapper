@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Shorts / Yapper</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/config.js"></script>
+<script src="js/components.js"></script>
+</head>
+<body>
+<div class="layout">
+  <nav class="sidebar" id="sidebar"></nav>
+  <main class="main shorts-main">
+    <div class="shorts-container" id="shorts-container">
+      <div class="loading"><div class="spinner"></div></div>
+    </div>
+  </main>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+let currentProfile = null;
+let shorts = [];
+let videoObserver = null;
+let progressTimer = null;
+
+async function init() {
+  const session = await requireAuth();
+  if (!session) return;
+  currentProfile = await getCurrentProfile();
+  window.currentProfile = currentProfile;
+  if (!currentProfile?.username) { window.location.href = 'setup.html'; return; }
+
+  document.getElementById('sidebar').innerHTML = sidebarHtml('shorts', currentProfile);
+  document.getElementById('compose-nav-btn').addEventListener('click', () => window.location.href='home.html');
+
+  const [bk, bl, rp] = await Promise.all([
+    _supabase.from('bookmarks').select('post_id').eq('user_id', currentProfile.id),
+    _supabase.from('blocks').select('blocked_id').eq('blocker_id', currentProfile.id),
+    _supabase.from('posts').select('id,repost_of').eq('user_id', currentProfile.id).not('repost_of', 'is', null)
+  ]);
+  window._bookmarks = new Set((bk.data||[]).map(b => b.post_id));
+  window._blocked   = new Set((bl.data||[]).map(b => b.blocked_id));
+  window._reposts   = new Map((rp.data||[]).map(r => [r.repost_of, r.id]));
+
+  await loadShorts();
+}
+
+async function loadShorts() {
+  const { data, error } = await _supabase.from('posts')
+    .select(`*, profiles!user_id(id,username,display_name,avatar_url,is_verified,is_admin,is_super_admin), likes(user_id)`)
+    .in('media_type', ['video', 'gif'])
+    .is('reply_to', null)
+    .not('media_url', 'is', null)
+    .order('created_at', { ascending: false })
+    .limit(40);
+
+  if (error) {
+    document.getElementById('shorts-container').innerHTML = `<div class="shorts-empty"><h3>Error</h3><p>${escapeHtml(error.message)}</p></div>`;
+    return;
+  }
+
+  shorts = (data||[])
+    .filter(p => !window._blocked.has(p.user_id))
+    .map(p => ({
+      ...p,
+      liked_by_me: (p.likes||[]).some(l => l.user_id === currentProfile.id),
+      likes_count: (p.likes||[]).length
+    }));
+
+  if (!shorts.length) {
+    document.getElementById('shorts-container').innerHTML = `
+      <div class="shorts-empty">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:64px;height:64px;color:var(--iris1);margin-bottom:16px;opacity:0.5"><path d="M6 3h12c1.1 0 2 .9 2 2v14c0 1.1-.9 2-2 2H6c-1.1 0-2-.9-2-2V5c0-1.1.9-2 2-2zm4 4v10l8-5-8-5z"/></svg>
+        <h3>No shorts yet</h3>
+        <p style="margin-top:8px">Post a video or GIF to start the reel.</p>
+      </div>`;
+    return;
+  }
+
+  document.getElementById('shorts-container').innerHTML = shorts.map(p => shortHtml(p)).join('');
+  setupObserver();
+  setupTaps();
+}
+
+function shortHtml(p) {
+  const profile = p.profiles;
+  const liked = p.liked_by_me;
+  const bookmarked = window._bookmarks?.has(p.id);
+  const hasReposted = window._reposts?.has(p.id);
+  const isOwn = p.user_id === currentProfile.id;
+
+  const media = p.media_type === 'video'
+    ? `<video src="${escapeHtml(p.media_url)}" loop muted playsinline preload="metadata"></video>`
+    : `<img src="${escapeHtml(p.media_url)}" alt="">`;
+
+  return `
+    <div class="short" data-post-id="${p.id}" data-user-id="${p.user_id}">
+      <div class="short-progress" data-progress></div>
+      <div class="short-media">${media}</div>
+      <div class="short-heart-anim"><svg viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></div>
+      <div class="short-playpause" data-playpause><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div>
+      <div class="short-overlay">
+        <div class="short-actions">
+          <a href="profile.html?id=${profile.id}" class="short-avatar" onclick="event.stopPropagation()" title="@${escapeHtml(profile.username)}">
+            ${avatarHtml(profile, 50)}
+            ${!isOwn ? '<span class="short-follow-plus">+</span>' : ''}
+          </a>
+          <button class="short-action ${liked?'liked':''}" data-liked="${liked?'1':'0'}" data-count="${p.likes_count}" onclick="event.stopPropagation();shortToggleLike('${p.id}', this)">
+            <svg viewBox="0 0 24 24" fill="${liked?'currentColor':'none'}" stroke="currentColor" stroke-width="1.8"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+            <span>${p.likes_count||0}</span>
+          </button>
+          <button class="short-action" onclick="event.stopPropagation();window.location.href='post.html?id=${p.id}'" title="Reply">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            <span>Reply</span>
+          </button>
+          <button class="short-action ${hasReposted?'reposted':''}" data-reposted="${hasReposted?'1':'0'}" onclick="event.stopPropagation();shortToggleRepost('${p.id}', this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+            <span>Repost</span>
+          </button>
+          <button class="short-action ${bookmarked?'bookmarked':''}" data-bookmarked="${bookmarked?'1':'0'}" onclick="event.stopPropagation();toggleBookmark('${p.id}', this)">
+            <svg viewBox="0 0 24 24" fill="${bookmarked?'currentColor':'none'}" stroke="currentColor" stroke-width="1.8"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+            <span>Save</span>
+          </button>
+          <button class="short-action" onclick="event.stopPropagation();shortShare('${p.id}')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
+            <span>Share</span>
+          </button>
+        </div>
+        <div class="short-info">
+          <a href="profile.html?id=${profile.id}" class="short-name" onclick="event.stopPropagation()">${escapeHtml(profile.display_name||profile.username)}${badgeHtml(profile)}</a>
+          <div class="short-handle">@${escapeHtml(profile.username)}</div>
+          ${p.content ? `<div class="short-caption">${hashtagify(p.content)}</div>` : ''}
+        </div>
+      </div>
+    </div>`;
+}
+
+// Auto-play visible video, pause others
+function setupObserver() {
+  if (videoObserver) videoObserver.disconnect();
+  videoObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      const video = entry.target.querySelector('video');
+      if (entry.isIntersecting && entry.intersectionRatio > 0.65) {
+        startProgress(entry.target);
+        if (video) video.play().catch(()=>{});
+      } else {
+        stopProgress(entry.target);
+        if (video) { video.pause(); video.currentTime = 0; }
+      }
+    });
+  }, { threshold: [0, 0.5, 0.65, 1] });
+  document.querySelectorAll('.short').forEach(s => videoObserver.observe(s));
+}
+
+function startProgress(shortEl) {
+  const bar = shortEl.querySelector('[data-progress]');
+  const video = shortEl.querySelector('video');
+  if (!bar) return;
+  if (progressTimer) clearInterval(progressTimer);
+  bar.style.width = '0%';
+  progressTimer = setInterval(() => {
+    if (video && video.duration) {
+      bar.style.width = `${(video.currentTime / video.duration) * 100}%`;
+    } else {
+      // GIF — no duration; show a slow sweep
+      const w = parseFloat(bar.style.width) || 0;
+      bar.style.width = `${(w + 1) % 100}%`;
+    }
+  }, 80);
+}
+
+function stopProgress(shortEl) {
+  if (progressTimer) clearInterval(progressTimer);
+  const bar = shortEl.querySelector('[data-progress]');
+  if (bar) bar.style.width = '0%';
+}
+
+// Tap = play/pause. Double-tap = like.
+function setupTaps() {
+  document.querySelectorAll('.short').forEach(short => {
+    let lastTap = 0;
+    short.addEventListener('click', (e) => {
+      if (e.target.closest('button, a')) return;
+      const now = Date.now();
+      if (now - lastTap < 320) {
+        const likeBtn = short.querySelector('.short-action');
+        if (likeBtn && likeBtn.dataset.liked === '0') {
+          shortToggleLike(short.dataset.postId, likeBtn);
+        }
+        animateHeart(short);
+        lastTap = 0;
+      } else {
+        const video = short.querySelector('video');
+        const indicator = short.querySelector('[data-playpause]');
+        if (video) {
+          if (video.paused) {
+            video.play().catch(()=>{});
+            flashIndicator(indicator, 'play');
+          } else {
+            video.pause();
+            flashIndicator(indicator, 'pause');
+          }
+        }
+        lastTap = now;
+      }
+    });
+  });
+}
+
+function flashIndicator(el, kind) {
+  if (!el) return;
+  el.innerHTML = kind === 'play'
+    ? '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>'
+    : '<svg viewBox="0 0 24 24"><path d="M6 4h4v16H6zm8 0h4v16h-4z"/></svg>';
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 500);
+}
+
+function animateHeart(short) {
+  const heart = short.querySelector('.short-heart-anim');
+  if (!heart) return;
+  heart.classList.remove('animate');
+  void heart.offsetWidth;
+  heart.classList.add('animate');
+}
+
+async function shortToggleLike(postId, btn) {
+  const liked = btn.dataset.liked === '1';
+  const count = parseInt(btn.dataset.count) || 0;
+  const newLiked = !liked;
+  const newCount = newLiked ? count+1 : count-1;
+  btn.dataset.liked = newLiked?'1':'0';
+  btn.dataset.count = newCount;
+  btn.classList.toggle('liked', newLiked);
+  btn.querySelector('svg').setAttribute('fill', newLiked?'currentColor':'none');
+  btn.querySelector('span').textContent = newCount;
+  if (newLiked) {
+    await _supabase.from('likes').insert({ user_id: currentProfile.id, post_id: postId });
+    const short = btn.closest('.short');
+    const ownerId = short?.dataset.userId;
+    if (ownerId && ownerId !== currentProfile.id)
+      await _supabase.from('notifications').insert({ user_id: ownerId, type: 'like', actor_id: currentProfile.id, post_id: postId });
+  } else {
+    await _supabase.from('likes').delete().eq('user_id', currentProfile.id).eq('post_id', postId);
+  }
+}
+
+async function shortToggleRepost(postId, btn) {
+  const myRepostId = window._reposts?.get(postId) || '';
+  await toggleRepost(postId, myRepostId, btn);
+}
+
+function shortShare(postId) {
+  const url = new URL(`post.html?id=${postId}`, window.location.href).href;
+  navigator.clipboard.writeText(url).then(() => showToast('Link copied!'));
+}
+
+// Reuse toggleLike name for components.js compatibility
+async function toggleLike(postId, btn) { return shortToggleLike(postId, btn); }
+function replyToPost(postId) { window.location.href = `post.html?id=${postId}`; }
+
+init();
+</script>
+</body>
+</html>

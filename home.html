@@ -54,6 +54,9 @@ let currentTab = 'for_you';
 let posts = [];
 let loadingFeed = false;
 let composeMedia = null; // { file?: File, url: string, type: 'image'|'video'|'gif' }
+let pendingPosts = [];
+let realtimeChannel = null;
+let myFollowingIds = new Set();
 
 async function init() {
   const session = await requireAuth();
@@ -77,15 +80,85 @@ async function init() {
   window._blocked   = new Set((blRes.data||[]).map(b => b.blocked_id));
   window._reposts   = new Map((rpRes.data||[]).map(r => [r.repost_of, r.id]));
 
+  // Cache my follow list for the realtime "Following" filter
+  const { data: fl } = await _supabase.from('follows').select('following_id').eq('follower_id', currentProfile.id);
+  myFollowingIds = new Set((fl||[]).map(f => f.following_id));
+
   loadFeed();
   loadSuggestions();
+  subscribeFeed();
   document.getElementById('aside-search').addEventListener('keydown', e => {
     if (e.key === 'Enter') window.location.href = `explore.html?q=${encodeURIComponent(e.target.value)}`;
   });
 }
 
+// ── Realtime feed ────────────────────────────────────────────────
+function subscribeFeed() {
+  if (realtimeChannel) _supabase.removeChannel(realtimeChannel);
+  realtimeChannel = _supabase
+    .channel('feed-posts')
+    .on('postgres_changes',
+      { event: 'INSERT', schema: 'public', table: 'posts' },
+      async (payload) => {
+        const np = payload.new;
+        if (np.reply_to) return;                                  // skip replies
+        if (np.user_id === currentProfile.id) return;             // own posts appear on submit
+        if (window._blocked?.has(np.user_id)) return;             // skip blocked
+        if (currentTab === 'following' && !myFollowingIds.has(np.user_id)) return;
+
+        // Already pending?
+        if (pendingPosts.some(p => p.id === np.id)) return;
+
+        const { data: full } = await _supabase.from('posts')
+          .select(`*, profiles!user_id(id,username,display_name,avatar_url,is_verified,is_admin,is_super_admin), likes(user_id)`)
+          .eq('id', np.id).single();
+        if (!full) return;
+
+        const enriched = {
+          ...full,
+          liked_by_me: (full.likes||[]).some(l => l.user_id === currentProfile.id),
+          likes_count: (full.likes||[]).length
+        };
+
+        pendingPosts.unshift(enriched);
+        showNewPostsPill();
+      })
+    .subscribe();
+}
+
+function showNewPostsPill() {
+  let pill = document.getElementById('new-posts-pill');
+  if (!pill) {
+    pill = document.createElement('button');
+    pill.id = 'new-posts-pill';
+    pill.className = 'new-posts-pill';
+    pill.onclick = flushNewPosts;
+    document.body.appendChild(pill);
+  }
+  const c = pendingPosts.length;
+  pill.innerHTML = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 4l-8 8h5v8h6v-8h5z"/></svg> ${c} new Yap${c === 1 ? '' : 's'}`;
+  pill.classList.add('show');
+}
+
+function hideNewPostsPill() {
+  document.getElementById('new-posts-pill')?.classList.remove('show');
+}
+
+async function flushNewPosts() {
+  if (!pendingPosts.length) return;
+  // Re-attach originals for any reposts/quotes
+  const merged = await attachOriginals([...pendingPosts, ...posts], currentProfile.id);
+  posts = merged;
+  pendingPosts = [];
+  document.getElementById('feed').innerHTML = posts.map(p => postHtml(p, currentProfile.id)).join('');
+  hideNewPostsPill();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
 function switchTab(tab) {
   currentTab = tab;
+  pendingPosts = [];
+  hideNewPostsPill();
   document.getElementById('tab-for-you').classList.toggle('active', tab === 'for_you');
   document.getElementById('tab-following').classList.toggle('active', tab === 'following');
   loadFeed();
