@@ -350,14 +350,133 @@ input, textarea { font-family: inherit; }
 
 /* Responsive */
 @media (max-width: 1280px) { .aside { display: none; } }
+
 @media (max-width: 688px) {
-  .sidebar { width: 68px; }
-  .logo span { font-size: 18px !important; letter-spacing: -1px !important; }
-  .nav-item span, .nav-yap-btn span { display: none; }
-  .nav-yap-btn { width: 48px; height: 48px; padding: 0; display: flex; align-items: center; justify-content: center; border-radius: 50%; }
-  .nav-yap-btn svg { display: block; width: 24px; height: 24px; }
-  .sidebar-profile .info, .sidebar-profile .dots { display: none; }
+  /* Layout: column flow with fixed bottom nav */
+  .layout { display: block; max-width: 100%; min-height: 100vh; }
+  .main { max-width: 100%; border-right: none; padding-bottom: 64px; min-height: 100vh; }
+  .aside { display: none; }
+
+  /* Sidebar becomes bottom nav bar */
+  .sidebar {
+    position: fixed; top: auto; bottom: 0; left: 0; right: 0;
+    width: 100%; height: 56px; padding: 0 4px;
+    flex-direction: row; justify-content: space-around; align-items: center;
+    border-right: none; border-top: 1px solid var(--border);
+    background: rgba(0,0,0,0.95); backdrop-filter: blur(12px);
+    z-index: 100; overflow: visible;
+  }
+  .sidebar .logo { display: none; }
+
+  /* Nav items: icon-only, equally spaced */
+  .nav-item {
+    flex: 1; width: auto; max-width: 100%; height: 100%;
+    padding: 0; margin: 0; border-radius: 0; gap: 0;
+    justify-content: center; align-items: center;
+  }
+  .nav-item span { display: none; }
+  .nav-item svg { width: 26px; height: 26px; }
+  .nav-item:hover { background: transparent; }
+  .nav-item.active svg { fill: var(--accent); }
+
+  /* Yap button: floating action button bottom-right */
+  .nav-yap-btn {
+    position: fixed; bottom: 72px; right: 16px;
+    width: 56px; height: 56px; border-radius: 50%;
+    padding: 0; margin: 0; z-index: 99;
+    box-shadow: 0 4px 16px rgba(29,155,240,0.5), 0 0 0 1px rgba(0,0,0,0.1);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .nav-yap-btn span { display: none; }
+  .nav-yap-btn::before {
+    content: ''; display: block; width: 24px; height: 24px;
+    background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'><path d='M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z'/></svg>") no-repeat center / contain;
+  }
+
+  /* Profile button floats top-right */
+  .sidebar-profile-wrap {
+    position: fixed; top: 10px; right: 10px;
+    margin: 0; width: auto; z-index: 90;
+  }
+  .sidebar-profile-inner {
+    background: rgba(15,15,15,0.85); backdrop-filter: blur(12px);
+    border: 1px solid var(--border); border-radius: 9999px; padding: 0;
+  }
+  .sidebar-profile-inner:hover { background: rgba(15,15,15,0.95); }
+  .sidebar-profile-link { padding: 3px 0 3px 4px; gap: 0; }
+  .sidebar-profile-link .info { display: none; }
+  .sidebar-profile-link .avatar,
+  .sidebar-profile-link .avatar-placeholder {
+    width: 30px !important; height: 30px !important; font-size: 12px !important;
+  }
+  .sidebar-dots-btn { padding: 6px 10px; }
+  .sidebar-dots-btn svg { width: 18px; height: 18px; }
+
+  /* Dropdown opens downward from the floating button */
+  .sidebar-dropdown {
+    bottom: auto; top: calc(100% + 6px);
+    right: 0; left: auto; min-width: 220px;
+  }
+
+  /* Feed header leaves room for the floating profile button */
+  .feed-header { padding-right: 56px; }
+
+  /* Tighter spacing */
+  .compose-box { padding: 10px 12px; }
+  .post { padding: 10px 12px; }
+  .post-detail .post-text { font-size: 19px; }
+
+  /* Auth page */
   .auth-left { display: none; }
+  .auth-right { padding: 24px; }
+
+  /* Setup page */
+  .setup-page { padding: 20px; }
+
+  /* Modal */
+  .modal { padding: 20px; max-width: calc(100% - 24px); border-radius: 14px; }
+  .modal h2 { font-size: 20px; margin-bottom: 16px; }
+
+  /* GIF picker */
+  .gif-picker { width: calc(100% - 24px); max-width: 360px; height: 56vh; }
+
+  /* Share menu */
+  .share-menu { min-width: 200px; }
+
+  /* Admin panel mobile */
+  .admin-stats { grid-template-columns: repeat(2, 1fr); gap: 8px; padding: 12px; }
+  .admin-stat { padding: 10px; }
+  .admin-stat .num { font-size: 22px; }
+  .admin-row { flex-wrap: wrap; padding: 10px 12px; }
+  .admin-row .user-info { flex: 1 1 calc(100% - 60px); }
+  .admin-actions { flex-wrap: wrap; gap: 6px; margin-top: 6px; width: 100%; }
+  .toggle-btn { font-size: 12px; padding: 5px 10px; }
+
+  /* DM page mobile: stack vertically; the chat area is collapsed by default */
+  .dm-wrap { flex-direction: column; min-height: calc(100vh - 120px); }
+  .dm-convos { width: 100%; border-right: none; max-height: none; }
+  .dm-chat { min-height: 50vh; }
+
+  /* Profile page mobile: tighter banner / avatar */
+  .profile-banner { height: 140px; }
+  .profile-avatar-wrap .avatar,
+  .profile-avatar-wrap .avatar-placeholder { width: 88px !important; height: 88px !important; font-size: 32px !important; }
+  .profile-avatar-wrap { margin-top: -48px; }
+
+  /* Post actions: tighter on small screens */
+  .action-btn { min-width: 40px; padding: 6px; }
+  .action-btn svg { width: 16px; height: 16px; }
+
+  /* Quote card preview a bit smaller */
+  .quote-card { padding: 8px 10px; }
+}
+
+/* Extra-narrow phones */
+@media (max-width: 380px) {
+  .nav-item svg { width: 22px; height: 22px; }
+  .sidebar { height: 52px; }
+  .main { padding-bottom: 60px; }
+  .nav-yap-btn { width: 52px; height: 52px; bottom: 66px; right: 12px; }
 }
 
 /* Toast */
